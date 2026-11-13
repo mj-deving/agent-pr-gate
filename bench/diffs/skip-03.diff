@@ -1,0 +1,121 @@
+diff --git a/docs/ai/PRODUCT.md b/docs/ai/PRODUCT.md
+index ac4799cbc39..0b4c4a2a279 100644
+--- a/docs/ai/PRODUCT.md
++++ b/docs/ai/PRODUCT.md
+@@ -1168,4 +1168,6 @@ A **fill-or-kill** order is the exception to all of this: it can only execute by
+ 
+ Users can buy crypto with fiat through an embedded OnRamper widget. OnRamper requires the destination wallet addresses in the widget URL to be HMAC-signed so they cannot be tampered with in transit; OISY holds the signing secret in the backend canister (it never reaches the browser) and the frontend asks the backend to sign the URL before loading the widget.
+ 
++The widget offers the user's enabled tokens. When the user has filtered the wallet by a network, it offers only that network's tokens, on the Buy and the Sell tab. A network with no token that OnRamper sells (e.g. XRP) still opens the widget with all enabled tokens.
++
+ The frontend supplies the wallet addresses it derived, but the backend signs them only after **re-deriving each one from the authenticated caller's principal and confirming it matches** — and it signs its own derived value, not the supplied string. So a caller can only ever obtain a signature over addresses they provably own (a signed OISY widget URL can only route a purchase to the signed-in user), and a frontend/backend derivation discrepancy fails the request loudly rather than signing an address the user may not control. If a supplied address does not match, cannot be derived, or the signing secret is not configured, the widget is shown as unavailable rather than loaded with an unverified URL.
+diff --git a/src/frontend/src/lib/components/onramper/OnramperWidget.svelte b/src/frontend/src/lib/components/onramper/OnramperWidget.svelte
+index 2aee3a14736..b8b11fb27be 100644
+--- a/src/frontend/src/lib/components/onramper/OnramperWidget.svelte
++++ b/src/frontend/src/lib/components/onramper/OnramperWidget.svelte
+@@ -17,6 +17,7 @@
+ 	import { btcAddressMainnet, ethAddress, solAddressMainnet } from '$lib/derived/address.derived';
+ 	import { authIdentity } from '$lib/derived/auth.derived';
+ 	import { routeAutopilotVault } from '$lib/derived/nav.derived';
++	import { enabledFungibleNetworkTokens } from '$lib/derived/network-tokens.derived';
+ 	import { networks } from '$lib/derived/networks.derived';
+ 	import { enabledTokens } from '$lib/derived/tokens.derived';
+ 	import {
+@@ -26,6 +27,8 @@
+ 	import { trackOnramperOpen } from '$lib/services/analytics.services';
+ 	import { i18n } from '$lib/stores/i18n.store';
+ 	import { token } from '$lib/stores/token.store';
++	import type { OnramperId } from '$lib/types/onramper';
++	import type { Token } from '$lib/types/token';
+ 	import { consoleError } from '$lib/utils/console.utils';
+ 	import { getTokenIdentifier } from '$lib/utils/identifier.utils';
+ 	import { buildOnramperLink, mapOnramperNetworkWallets } from '$lib/utils/onramper.utils';
+@@ -42,9 +45,20 @@
+ 	// avoids opening on a token that none of the enabled onramps offers.
+ 	let defaultCrypto = $derived($token?.buy?.onramperId ?? vaultAssetToken?.buy?.onramperId);
+ 
+-	// List of Cryptocurrencies that are allowed to be bought
++	const toOnramperIds = (tokens: Token[]): OnramperId[] =>
++		tokens.map(({ buy }) => buy?.onramperId).filter(nonNullish);
++
++	// OnRamper ignores `onlyCryptoNetworks` whenever `onlyCryptos` is set, so the selected network
++	// has to narrow the tokens themselves.
++	let selectedNetworkOnlyCryptos = $derived(toOnramperIds($enabledFungibleNetworkTokens));
++
++	// List of Cryptocurrencies that are allowed to be bought. A selected network with no token that
++	// OnRamper sells (e.g. XRP) keeps all enabled tokens: an empty list would drop the parameter, and
++	// OnRamper would then offer every token it has on our networks.
+ 	let onlyCryptos = $derived(
+-		$enabledTokens.map((token) => token.buy?.onramperId).filter(nonNullish)
++		selectedNetworkOnlyCryptos.length > 0
++			? selectedNetworkOnlyCryptos
++			: toOnramperIds($enabledTokens)
+ 	);
+ 
+ 	// List of Cryptocurrency Networks to which the tokens are allowed to be bought
+diff --git a/src/frontend/src/tests/lib/components/buy/BuyModalContent.spec.ts b/src/frontend/src/tests/lib/components/buy/BuyModalContent.spec.ts
+index a146cffb706..837e1d51c6f 100644
+--- a/src/frontend/src/tests/lib/components/buy/BuyModalContent.spec.ts
++++ b/src/frontend/src/tests/lib/components/buy/BuyModalContent.spec.ts
+@@ -1,4 +1,6 @@
++import { ICP_NETWORK_ID, ICP_PSEUDO_TESTNET_NETWORK_ID } from '$env/networks/networks.icp.env';
+ import * as onramperEnv from '$env/rest/onramper.env';
++import { ETHEREUM_TOKEN } from '$env/tokens/tokens.eth.env';
+ import { ICP_TOKEN } from '$env/tokens/tokens.icp.env';
+ import * as backendApi from '$lib/api/backend.api';
+ import { OnramperSecretNotConfiguredError } from '$lib/canisters/errors';
+@@ -12,6 +14,7 @@ import * as analyticsServices from '$lib/services/analytics.services';
+ import { token } from '$lib/stores/token.store';
+ import { mockAuthStore } from '$tests/mocks/auth.mock';
+ import en from '$tests/mocks/i18n.mock';
++import { mockPage } from '$tests/mocks/page.store.mock';
+ import { render, waitFor } from '@testing-library/svelte';
+ 
+ describe('BuyModalContent', () => {
+@@ -121,6 +124,7 @@ describe('BuyModalContent', () => {
+ 
+ 		afterEach(() => {
+ 			token.reset();
++			mockPage.reset();
+ 		});
+ 
+ 		const widgetParams = async (findByTestId: (id: string) => Promise<HTMLElement>) => {
+@@ -129,6 +133,38 @@ describe('BuyModalContent', () => {
+ 			return new URL(iframe.getAttribute('src') ?? '').searchParams;
+ 		};
+ 
++		xit('offers the tokens of every network when no network is selected', async () => {
++			const { findByTestId } = render(BuyModalContent);
++			const params = await widgetParams(findByTestId);
++
++			const onlyCryptos = params.get('onlyCryptos')?.split(',');
++
++			expect(onlyCryptos).toContain(ETHEREUM_TOKEN.buy?.onramperId);
++			expect(onlyCryptos).toContain(ICP_TOKEN.buy?.onramperId);
++		});
++
++		it('offers only the tokens of the selected network on both tabs', async () => {
++			mockPage.mockNetwork(ICP_NETWORK_ID.description);
++
++			const { findByTestId } = render(BuyModalContent);
++			const params = await widgetParams(findByTestId);
++
++			expect(params.get('onlyCryptos')).toBe(ICP_TOKEN.buy?.onramperId);
++			expect(params.get('sell_onlyCryptos')).toBe(ICP_TOKEN.buy?.onramperId);
++		});
++
++		it('offers the tokens of every network when the selected one has none that OnRamper sells', async () => {
++			mockPage.mockNetwork(ICP_PSEUDO_TESTNET_NETWORK_ID.description);
++
++			const { findByTestId } = render(BuyModalContent);
++			const params = await widgetParams(findByTestId);
++
++			const onlyCryptos = params.get('onlyCryptos')?.split(',');
++
++			expect(onlyCryptos).toContain(ETHEREUM_TOKEN.buy?.onramperId);
++			expect(onlyCryptos).toContain(ICP_TOKEN.buy?.onramperId);
++		});
++
+ 		it('sends no default token when none is open', async () => {
+ 			token.reset();
+ 

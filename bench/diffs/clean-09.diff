@@ -1,0 +1,127 @@
+diff --git a/changelog/15254.improvement.rst b/changelog/15254.improvement.rst
+new file mode 100644
+index 00000000000..a81113fc16a
+--- /dev/null
++++ b/changelog/15254.improvement.rst
+@@ -0,0 +1 @@
++:fixture:`tmp_path` and :meth:`TempPathFactory.mktemp <pytest.TempPathFactory.mktemp>` no longer list the whole base temporary directory on every call, which made sessions with many temporary directories quadratically slow. Numbers are now handed out from a per-prefix counter.
+diff --git a/src/_pytest/tmpdir.py b/src/_pytest/tmpdir.py
+index 616a09d1b27..a82b56f9ee0 100644
+--- a/src/_pytest/tmpdir.py
++++ b/src/_pytest/tmpdir.py
+@@ -17,10 +17,12 @@
+ from typing import final
+ from typing import Literal
+ 
++from .pathlib import _force_symlink
+ from .pathlib import cleanup_dead_symlinks
++from .pathlib import find_suffixes
+ from .pathlib import LOCK_TIMEOUT
+-from .pathlib import make_numbered_dir
+ from .pathlib import make_numbered_dir_with_cleanup
++from .pathlib import parse_num
+ from .pathlib import rm_rf
+ from _pytest.compat import get_user_id
+ from _pytest.config import Config
+@@ -79,6 +81,9 @@ def __init__(
+         # Register cleanups for session finish. Also called atexit as a last
+         # resort if sessionfinish for some reason doesn't happen.
+         self._exit_stack = ExitStack()
++        # Lower-cased prefix -> next number to try, so numbered directories
++        # do not require listing basetemp on every call.
++        self._next_number: dict[str, int] = {}
+ 
+     @classmethod
+     def from_config(
+@@ -134,10 +139,38 @@ def mktemp(self, basename: str, numbered: bool = True) -> Path:
+             p = self.getbasetemp().joinpath(basename)
+             p.mkdir(mode=0o700)
+         else:
+-            p = make_numbered_dir(root=self.getbasetemp(), prefix=basename, mode=0o700)
++            p = self._make_counted_dir(basename, seed_from_listing=True)
+             self._trace("mktemp", p)
+         return p
+ 
++    def _make_counted_dir(self, prefix: str, *, seed_from_listing: bool) -> Path:
++        """Create ``<prefix><n>`` in basetemp, using a per-prefix counter.
++
++        With ``seed_from_listing``, the first use of a prefix lists basetemp so
++        the number is greater than any existing one; otherwise counting starts
++        at 0, as basetemp is created by this factory. mkdir decides uniqueness.
++        """
++        root = self.getbasetemp()
++        key = prefix.lower()
++        number = self._next_number.get(key)
++        if number is None:
++            number = 0
++            if seed_from_listing:
++                number = (
++                    max(map(parse_num, find_suffixes(root, prefix)), default=-1) + 1
++                )
++        while True:
++            path = root.joinpath(f"{prefix}{number}")
++            try:
++                path.mkdir(mode=0o700)
++            except FileExistsError:
++                number += 1
++            else:
++                break
++        self._next_number[key] = number + 1
++        _force_symlink(root, prefix + "current", path)
++        return path
++
+     def getbasetemp(self) -> Path:
+         """Return the base temporary directory, creating it if needed.
+ 
+@@ -278,7 +311,9 @@ def _mk_tmp(request: FixtureRequest, factory: TempPathFactory) -> Path:
+     name = re.sub(r"[\W]", "_", name)
+     MAXVAL = 30
+     name = name[:MAXVAL]
+-    return factory.mktemp(name, numbered=True)
++    path = factory._make_counted_dir(name, seed_from_listing=False)
++    factory._trace("mktemp", path)
++    return path
+ 
+ 
+ @fixture
+diff --git a/testing/test_tmpdir.py b/testing/test_tmpdir.py
+index 0b33a74b926..be4901ae97e 100644
+--- a/testing/test_tmpdir.py
++++ b/testing/test_tmpdir.py
+@@ -70,6 +70,36 @@ def test_mktemp(self, tmp_path: Path) -> None:
+         assert str(tmp2.relative_to(t.getbasetemp())).startswith("this")
+         assert tmp2 != tmp
+ 
++    def test_mktemp_lists_basetemp_once_per_prefix(
++        self, tmp_path: Path, monkeypatch: MonkeyPatch
++    ) -> None:
++        """#15254"""
++        config = cast(Config, FakeConfig(tmp_path))
++        t = TempPathFactory.from_config(config, _ispytest=True)
++        (t.getbasetemp() / "world5").mkdir()
++        listed: list[str] = []
++        orig = pathlib.find_suffixes
++
++        def find_suffixes(root: Path, prefix: str):
++            listed.append(prefix)
++            return orig(root, prefix)
++
++        monkeypatch.setattr("_pytest.tmpdir.find_suffixes", find_suffixes)
++        names = [t.mktemp("world").name for _ in range(3)]
++        # Greater than any existing one, listing only on first use.
++        assert names == ["world6", "world7", "world8"]
++        assert listed == ["world"]
++
++    def test_counted_dir_skips_foreign_entries(self, tmp_path: Path) -> None:
++        """#15254"""
++        config = cast(Config, FakeConfig(tmp_path))
++        t = TempPathFactory.from_config(config, _ispytest=True)
++        first = t._make_counted_dir("test_a", seed_from_listing=False)
++        (t.getbasetemp() / "test_a1").mkdir()
++        second = t._make_counted_dir("test_a", seed_from_listing=False)
++        assert first.name == "test_a0"
++        assert second.name == "test_a2"
++
+     def test_tmppath_relative_basetemp_absolute(
+         self, tmp_path: Path, monkeypatch: MonkeyPatch
+     ) -> None:

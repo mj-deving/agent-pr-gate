@@ -1,0 +1,133 @@
+diff --git a/docs/config/api.md b/docs/config/api.md
+index 8c973dbbd94e..df0db82d764b 100644
+--- a/docs/config/api.md
++++ b/docs/config/api.md
+@@ -13,6 +13,8 @@ Listen to port and serve API for [the UI](/guide/ui) or [browser server](/guide/
+ 
+ In Browser Mode the server binds its port on the first browser launch, unless `api` or `ui` is enabled.
+ 
++Set `port` to `0` to let the operating system pick a free port.
++
+ ## api.allowWrite <Version>4.1.0</Version> {#api-allowwrite}
+ 
+ - **Type:** `boolean`
+diff --git a/packages/vitest/src/node/config/resolveConfig.ts b/packages/vitest/src/node/config/resolveConfig.ts
+index 1140430dbbe3..26b758afcb5a 100644
+--- a/packages/vitest/src/node/config/resolveConfig.ts
++++ b/packages/vitest/src/node/config/resolveConfig.ts
+@@ -120,7 +120,7 @@ export function resolveApiServerConfig(
+   }
+ 
+   if (api) {
+-    if (!api.port && !api.middlewareMode) {
++    if (api.port == null && !api.middlewareMode) {
+       api.port = defaultPort
+     }
+   } else {
+@@ -132,7 +132,7 @@ export function resolveApiServerConfig(
+     api.middlewareMode = false
+     // The browser server is standalone, so it always needs a port even when the
+     // user didn't configure `api`/`ui` (in which case `api` defaulted above)
+-    if (!api.port) {
++    if (api.port == null) {
+       api.port = defaultPort
+     }
+   }
+diff --git a/packages/vitest/src/node/logger.ts b/packages/vitest/src/node/logger.ts
+index 5c490871a17c..a287398266eb 100644
+--- a/packages/vitest/src/node/logger.ts
++++ b/packages/vitest/src/node/logger.ts
+@@ -237,22 +237,16 @@ export class Logger {
+       this.log(PAD + c.gray(`Running tests with seed "${seed}"`))
+     }
+ 
+-    if (this.ctx.config.ui) {
+-      const host = this.ctx.config.api?.host || 'localhost'
+-      const port = this.ctx.vite.config.server.port
+-      const url = new URL(this.ctx.config.uiBase, `http://${host}:${port}`)
+-      url.searchParams.set('token', this.ctx.config.api.token)
+-
+-      this.log(PAD + c.dim(c.green(`UI started at ${url}`)))
+-    }
+-    // browser mode always has `api.port`, but only listens on startup for `api`/`ui`
+-    else if (this.ctx.config.api?.port && this.ctx.config._apiRequested) {
+-      const resolvedUrls = this.ctx.vite.resolvedUrls
+-      // workaround for https://github.com/vitejs/vite/issues/15438, it was fixed in vite 5.1
+-      const fallbackUrl = `http://${this.ctx.config.api.host || 'localhost'}:${this.ctx.config.api.port}`
+-      const origin = resolvedUrls?.local[0] ?? resolvedUrls?.network[0] ?? fallbackUrl
+-
+-      this.log(PAD + c.dim(c.green(`API started at ${new URL('/', origin)}`)))
++    const resolvedUrls = this.ctx.vite.resolvedUrls
++    const origin = resolvedUrls?.local[0] ?? resolvedUrls?.network[0]
++    if (origin && this.ctx.config._apiRequested) {
++      if (this.ctx.config.ui) {
++        const url = new URL(this.ctx.config.uiBase, origin)
++        url.searchParams.set('token', this.ctx.config.api.token)
++        this.log(PAD + c.dim(c.green(`UI started at ${url}`)))
++      } else {
++        this.log(PAD + c.dim(c.green(`API started at ${new URL('/', origin)}`)))
++      }
+     }
+ 
+     if (this.ctx.coverageProvider) {
+diff --git a/packages/vitest/src/node/plugins/browserLoader.ts b/packages/vitest/src/node/plugins/browserLoader.ts
+index b282eb825835..60cf623fb803 100644
+--- a/packages/vitest/src/node/plugins/browserLoader.ts
++++ b/packages/vitest/src/node/plugins/browserLoader.ts
+@@ -173,7 +173,7 @@ export async function createClusterServer(
+ 
+   if (!contribution) {
+     const server = await createViteServer(viteConfig)
+-    if (config.api.port) {
++    if (config.api.port != null) {
+       await server.listen(config.api.port)
+     }
+     return { server }
+diff --git a/test/browser/specs/server-url.test.ts b/test/browser/specs/server-url.test.ts
+index 87815c33cc64..f660f13e7696 100644
+--- a/test/browser/specs/server-url.test.ts
++++ b/test/browser/specs/server-url.test.ts
+@@ -1,5 +1,6 @@
+ import { afterEach, expect, test } from 'vitest'
+-import { instances, runBrowserTests } from './utils'
++import { defaultBrowserPort } from 'vitest/config'
++import { instances, runBrowserTests, runInlineBrowserTests } from './utils'
+ 
+ afterEach(() => {
+   delete process.env.TEST_HTTPS
+@@ -28,3 +29,15 @@ test('server-url https', async () => {
+   expect(new URL(url).port).toBe('31122')
+   expect(stdout).toReportSummaryTestFiles({ passed: instances.length })
+ })
++
++test.skip('server-url port 0', async () => {
++  const { stderr, ctx } = await runInlineBrowserTests(
++    { 'basic.test.ts': `test('basic', () => {})` },
++    { api: { port: 0 }, globals: true, watch: true },
++  )
++  expect(stderr).toBe('')
++  const url = ctx?.projects[0].vite.resolvedUrls?.local[0]
++  expect.assert(url)
++  // Vite 8.2.1+ binds an OS-assigned port, older Vite binds 5173
++  expect(new URL(url).port).not.toBe(String(defaultBrowserPort))
++})
+diff --git a/test/e2e/test/override.test.ts b/test/e2e/test/override.test.ts
+index 6f3e9328bd2a..f8a61fe06ca8 100644
+--- a/test/e2e/test/override.test.ts
++++ b/test/e2e/test/override.test.ts
+@@ -50,6 +50,15 @@ describe('correctly defines api flag', () => {
+     })
+   })
+ 
++  it.for<[string, Parameters<typeof config>[0]]>([
++    ['api.port', { api: { port: 0 } }],
++    ['api', { api: 0 }],
++  ])('keeps port 0 with %s', async ([, options]) => {
++    const c = await config(options)
++    expect(c.api.port).toBe(0)
++    expect(c.$viteConfig.server.port).toBe(0)
++  })
++
+   it('allowWrite and allowExec default to true when not exposed to network', async () => {
+     const c = await config({ api: { port: 5555 } })
+     expect(c.api.allowWrite).toBe(true)

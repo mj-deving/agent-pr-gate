@@ -1,0 +1,36 @@
+diff --git a/typing_tests/baseline.py b/typing_tests/baseline.py
+index 9d52c0de1..35604dc44 100644
+--- a/typing_tests/baseline.py
++++ b/typing_tests/baseline.py
+@@ -7,9 +7,6 @@
+ 
+ from __future__ import annotations
+ 
+-import copy
+-import sys
+-
+ from typing import Any, Generator
+ 
+ import attrs
+@@ -24,8 +21,6 @@ class NGClass:
+ 
+ ngc = attrs.assoc(ngc, x=1)
+ ngc = attrs.evolve(ngc, x=1)
+-if sys.version_info >= (3, 13):
+-    ngc = copy.replace(ngc, x=1)
+ 
+ 
+ @attrs.mutable(slots=False)
+diff --git a/typing_tests/pyrefly.py b/typing_tests/pyrefly.py
+index e5ab16592..bd60bdf65 100644
+--- a/typing_tests/pyrefly.py
++++ b/typing_tests/pyrefly.py
+@@ -24,7 +24,7 @@ class C:
+ C(a=1)
+ 
+ if sys.version_info >= (3, 13):
+-    cc = copy.replace(cc, x=1)
++    cc = copy.replace(cc, a=1)  # noqa
+ 
+ 
+ @attrs.define

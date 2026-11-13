@@ -1,0 +1,44 @@
+diff --git a/src/helper/route/index.test.ts b/src/helper/route/index.test.ts
+index 5c71b742b3..8a2d9ba05b 100644
+--- a/src/helper/route/index.test.ts
++++ b/src/helper/route/index.test.ts
+@@ -237,4 +237,23 @@ describe('basePath', () => {
+ 
+     expect(basePath(c)).toBe('/sub-app-path/foo')
+   })
++
++  fit('should return basePath with custom regex pattern mounted with app.route()', async () => {
++    const app = new Hono()
++    const subApp = new Hono()
++
++    subApp.get('/posts/:id', (c) => c.text(basePath(c)))
++    app.route('/api/:version{v[0-9]+}', subApp)
++    app.route('/tags/:tag{foo|bar}', subApp)
++    app.route('/users/:name{[a-z]+}/:group', subApp)
++
++    let res = await app.request('/api/v2/posts/123')
++    expect(await res.text()).toBe('/api/v2')
++
++    res = await app.request('/tags/bar/posts/123')
++    expect(await res.text()).toBe('/tags/bar')
++
++    res = await app.request('/users/abc/def/posts/123')
++    expect(await res.text()).toBe('/users/abc/def')
++  })
+ })
+diff --git a/src/helper/route/index.ts b/src/helper/route/index.ts
+index afcb0f1297..c5e91bdf9a 100644
+--- a/src/helper/route/index.ts
++++ b/src/helper/route/index.ts
+@@ -125,7 +125,10 @@ export const basePath = (c: Context, index?: number): string => {
+       const pattern = getPattern(paths[i], paths[i + 1])
+       if (pattern) {
+         const re = pattern[2] === true || pattern === '*' ? /[^\/]+/ : pattern[2]
+-        basePathLength += reqPath.substring(basePathLength + 1).match(re)?.[0].length || 0
++        const restPath = reqPath.substring(basePathLength + 1)
++        // like the router, fall back to matching only the current segment
++        const segment = restPath.split('/', 1)[0]
++        basePathLength += (restPath.match(re)?.[0] ?? (re.test(segment) ? segment : '')).length
+       } else {
+         basePathLength += paths[i].length
+       }

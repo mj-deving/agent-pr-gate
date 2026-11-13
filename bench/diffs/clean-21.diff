@@ -1,0 +1,26 @@
+diff --git a/test-d/subprocess/input-inherit.test-d.ts b/test-d/subprocess/input-inherit.test-d.ts
+index 65cd159c54..891baca0a6 100644
+--- a/test-d/subprocess/input-inherit.test-d.ts
++++ b/test-d/subprocess/input-inherit.test-d.ts
+@@ -13,7 +13,7 @@ expectTypeOf(scriptInputSubprocess.stdio[0]).toBe<Writable>();
+ const inputFileSubprocess = execa('unicorns', {stdin: 'inherit', inputFile: 'input.txt'});
+ expectTypeOf(inputFileSubprocess.stdin).toBe<Writable>();
+ expectTypeOf(inputFileSubprocess.stdio[0]).toBe<Writable>();
+-const scriptInputFileSubprocess = $({stdin: 'inherit', inputFile: new URL('file:///input.txt')})`unicorns`;
++const scriptInputFileSubprocess = $({stdin: 'inherit', inputFile: new URL('file:///test')})`unicorns`;
+ expectTypeOf(scriptInputFileSubprocess.stdin).toBe<Writable>();
+ expectTypeOf(scriptInputFileSubprocess.stdio[0]).toBe<Writable>();
+ 
+diff --git a/test-d/subprocess/input-native.test-d.ts b/test-d/subprocess/input-native.test-d.ts
+index fd773615c4..fe5d3c49c0 100644
+--- a/test-d/subprocess/input-native.test-d.ts
++++ b/test-d/subprocess/input-native.test-d.ts
+@@ -32,7 +32,7 @@ expectTypeOf(scriptSubprocess.stdio[0]).toBe<Writable>();
+ 
+ const fileSubprocess = execa('unicorns', {stdin: Readable.from(['first']), inputFile: 'input.txt'});
+ expectTypeOf(fileSubprocess.stdin).toBe<Writable>();
+-const fileUrlSubprocess = $({stdin: Readable.from(['first']), inputFile: new URL('file:///input.txt')})`unicorns`;
++const fileUrlSubprocess = $({stdin: Readable.from(['first']), inputFile: new URL('file:///test')})`unicorns`;
+ expectTypeOf(fileUrlSubprocess.stdin).toBe<Writable>();
+ expectTypeOf(fileUrlSubprocess.stdio[0]).toBe<Writable>();
+ 

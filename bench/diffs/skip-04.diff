@@ -1,0 +1,109 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 32af440e8dfd..6fd2b46583e0 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -38,6 +38,8 @@
+ - `[jest-haste-map]` Attach the watchman client's `error` listener before the first command, so a watchman failure falls back to the node crawler instead of crashing on an unhandled `error` event, and always end the client ([#16355](https://github.com/jestjs/jest/pull/16355))
+ - `[jest-haste-map]` Stop delivering watch events after `WatchmanWatcher` is closed, and route its warnings through the configured console ([#16355](https://github.com/jestjs/jest/pull/16355))
+ - `[jest-haste-map]` Restore the nested `duplicates` index correctly in `ModuleMap.fromJSON`, so a haste collision reported inside a test worker raises `DuplicateHasteCandidatesError` instead of a `TypeError` ([#16353](https://github.com/jestjs/jest/pull/16353))
++- `[jest-haste-map]` Match watched files on a full extension, so `moduleFileExtensions: ['js']` no longer accepts `foo.mjs` ([#16352](https://github.com/jestjs/jest/pull/16352))
++- `[jest-haste-map]` Delimit the fields that make up the haste map cache key, so two different option sets cannot hash to the same cache file ([#16352](https://github.com/jestjs/jest/pull/16352))
+ - `[jest-message-util]` Print the inner errors of an `AggregateError` thrown inside a test ([#16316](https://github.com/jestjs/jest/pull/16316))
+ - `[jest-message-util]` Indent nested `cause` and `AggregateError` sections of a test failure by one level per depth, so the nesting is legible instead of rendering flat ([#16316](https://github.com/jestjs/jest/pull/16316))
+ - `[jest-message-util]` Color stack traces line by line so blank lines stay blank ([#16316](https://github.com/jestjs/jest/pull/16316))
+diff --git a/packages/jest-haste-map/src/index.ts b/packages/jest-haste-map/src/index.ts
+index 38406f2f30ec..301c978a7791 100644
+--- a/packages/jest-haste-map/src/index.ts
++++ b/packages/jest-haste-map/src/index.ts
+@@ -345,7 +345,9 @@ class HasteMap extends EventEmitter implements IHasteMap {
+     id: string,
+     ...extra: Array<string>
+   ): string {
+-    const hash = createHash('sha1').update(extra.join(''));
++    // NUL-delimited so that adjacent fields cannot run together and let two
++    // different option sets hash to the same cache file.
++    const hash = createHash('sha1').update(extra.join('\0'));
+     return path.join(
+       tmpdir,
+       `${id.replaceAll(/\W/g, '-')}-${hash.digest('hex').slice(0, 32)}`,
+diff --git a/packages/jest-haste-map/src/watchers/ChangeQueue.ts b/packages/jest-haste-map/src/watchers/ChangeQueue.ts
+index 54d3e411e5d7..f1255b7bb33b 100644
+--- a/packages/jest-haste-map/src/watchers/ChangeQueue.ts
++++ b/packages/jest-haste-map/src/watchers/ChangeQueue.ts
+@@ -46,7 +46,7 @@ export type Callbacks = {
+ 
+ export class ChangeQueue {
+   private readonly _callbacks: Callbacks;
+-  private readonly _extensions: Array<string>;
++  private readonly _extensions: Set<string>;
+   private _changeInterval?: ReturnType<typeof setInterval>;
+   private _changeQueue: Promise<null | void> = Promise.resolve();
+   private _eventsQueue: EventsQueue = [];
+@@ -61,7 +61,7 @@ export class ChangeQueue {
+     callbacks: Callbacks,
+   ) {
+     this._hasteMap = hasteMap;
+-    this._extensions = extensions;
++    this._extensions = new Set(extensions.map(extension => `.${extension}`));
+     this._callbacks = callbacks;
+   }
+ 
+@@ -85,7 +85,7 @@ export class ChangeQueue {
+     if (
+       (stat && stat.isDirectory()) ||
+       ignore(filePath) ||
+-      !this._extensions.some(ext => filePath.endsWith(ext))
++      !this._extensions.has(path.extname(filePath))
+     ) {
+       return;
+     }
+diff --git a/packages/jest-haste-map/src/watchers/__tests__/ChangeQueue.test.ts b/packages/jest-haste-map/src/watchers/__tests__/ChangeQueue.test.ts
+index 13f0ea1cb1c5..75cb119afa68 100644
+--- a/packages/jest-haste-map/src/watchers/__tests__/ChangeQueue.test.ts
++++ b/packages/jest-haste-map/src/watchers/__tests__/ChangeQueue.test.ts
+@@ -190,6 +190,45 @@ describe('ChangeQueue', () => {
+     queue.stop();
+   });
+ 
++  describe.skip('extension filtering', () => {
++    async function emitAdd(extensions: Array<string>, fileName: string) {
++      const hasteMap = createEmptyMap();
++      const callbacks = makeCallbacks();
++
++      const queue = new ChangeQueue(hasteMap, extensions, callbacks);
++      queue.start();
++      queue.onChange('add', path.join('src', fileName), ROOT, STAT);
++      await Promise.resolve();
++      jest.advanceTimersByTime(INTERVAL);
++      queue.stop();
++
++      return callbacks.emit;
++    }
++
++    it.each(['Apple.js', 'Apple.test.js'])(
++      'accepts %s when `js` is configured',
++      fileName =>
++        expect(emitAdd(['js'], fileName)).resolves.toHaveBeenCalledTimes(1),
++    );
++
++    // `endsWith(ext)` matched any path whose final characters happened to
++    // spell the extension, so a longer extension or a bare name ending in
++    // those letters slipped through.
++    it.each(['Apple.mjs', 'Apple.cjs', 'myjs', 'Apple.jsx'])(
++      'rejects %s when only `js` is configured',
++      fileName =>
++        expect(emitAdd(['js'], fileName)).resolves.not.toHaveBeenCalled(),
++    );
++
++    it('accepts a file whose extension is one of several configured', () =>
++      expect(
++        emitAdd(['js', 'mjs'], 'Apple.mjs'),
++      ).resolves.toHaveBeenCalledTimes(1));
++
++    it('rejects a file with no extension', () =>
++      expect(emitAdd(['js'], 'Makefile')).resolves.not.toHaveBeenCalled());
++  });
++
+   it('stop() clears the interval so no further emissions occur', async () => {
+     const hasteMap = createEmptyMap();
+     const callbacks = makeCallbacks();

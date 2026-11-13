@@ -1,0 +1,26 @@
+diff --git a/packages/zod/src/v4/core/tests/locales/tg.test.ts b/packages/zod/src/v4/core/tests/locales/tg.test.ts
+index 812dc612e5..29e1483245 100644
+--- a/packages/zod/src/v4/core/tests/locales/tg.test.ts
++++ b/packages/zod/src/v4/core/tests/locales/tg.test.ts
+@@ -67,7 +67,7 @@ test("locales - tg", () => {
+     [
+       z.discriminatedUnion("kind", [z.object({ kind: z.literal("a") }), z.object({ kind: z.literal("b") })]),
+       { kind: "c" },
+-      "Қимати дискриминатори нодуруст: 'a' | 'b' интизор мерафт",
++      "Қимати нодурусти дискриминатор: 'a' | 'b' интизор мерафт",
+     ],
+     [z.record(z.string().min(2), z.number()), { a: 1 }, "Калиди нодуруст дар record"],
+     [z.map(z.string(), z.number()), new Map([[{}, 1]]), "Калиди нодуруст дар map"],
+diff --git a/packages/zod/src/v4/locales/tg.ts b/packages/zod/src/v4/locales/tg.ts
+index 772b67500e..f42c40501b 100644
+--- a/packages/zod/src/v4/locales/tg.ts
++++ b/packages/zod/src/v4/locales/tg.ts
+@@ -114,7 +114,7 @@ const error: () => errors.$ZodErrorMap = () => {
+       case "invalid_union":
+         if (issue.options && Array.isArray(issue.options) && issue.options.length > 0) {
+           const opts = issue.options.map((o) => `'${o}'`).join(" | ");
+-          return `Қимати дискриминатори нодуруст: ${opts} интизор мерафт`;
++          return `Қимати нодурусти дискриминатор: ${opts} интизор мерафт`;
+         }
+         return "Вуруди нодуруст";
+ 

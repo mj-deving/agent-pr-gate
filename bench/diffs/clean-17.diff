@@ -1,0 +1,74 @@
+diff --git a/src/helper/ssg/ssg.test.tsx b/src/helper/ssg/ssg.test.tsx
+index f012dbc9e9..3f16053e88 100644
+--- a/src/helper/ssg/ssg.test.tsx
++++ b/src/helper/ssg/ssg.test.tsx
+@@ -702,6 +702,26 @@ describe('saveContentToFile function', () => {
+     expect(fsMock.writeFile).toHaveBeenCalledWith('static/rss.xml', yamlContent)
+   })
+ 
++  it('should determine the extension case-insensitively', async () => {
++    const htmlData = { routePath: '/html', content: 'Hello', mimeType: 'TEXT/HTML' }
++    const jsonData = { routePath: '/json', content: '{}', mimeType: 'APPLICATION/JSON' }
++    const xmlData = { routePath: '/xml', content: '<a/>', mimeType: 'APPLICATION/XML' }
++    const fooData = { routePath: '/foo', content: 'foo', mimeType: 'TEXT/X-FOO' }
++    const barData = { routePath: '/bar', content: 'bar', mimeType: 'TEXT/X-BAR' }
++
++    await saveContentToFile(Promise.resolve(htmlData), fsMock, './static')
++    await saveContentToFile(Promise.resolve(jsonData), fsMock, './static')
++    await saveContentToFile(Promise.resolve(xmlData), fsMock, './static')
++    await saveContentToFile(Promise.resolve(fooData), fsMock, './static', { 'text/x-foo': 'foo' })
++    await saveContentToFile(Promise.resolve(barData), fsMock, './static', { 'TEXT/X-BAR': 'bar' })
++
++    expect(fsMock.writeFile).toHaveBeenCalledWith('static/html.html', 'Hello')
++    expect(fsMock.writeFile).toHaveBeenCalledWith('static/json.json', '{}')
++    expect(fsMock.writeFile).toHaveBeenCalledWith('static/xml.xml', '<a/>')
++    expect(fsMock.writeFile).toHaveBeenCalledWith('static/foo.foo', 'foo')
++    expect(fsMock.writeFile).toHaveBeenCalledWith('static/bar.bar', 'bar')
++  })
++
+   it('should reject writing files outside outDir via path traversal', async () => {
+     await expect(
+       saveContentToFile(
+diff --git a/src/helper/ssg/ssg.ts b/src/helper/ssg/ssg.ts
+index 80669758df..c9506ef6a5 100644
+--- a/src/helper/ssg/ssg.ts
++++ b/src/helper/ssg/ssg.ts
+@@ -104,6 +104,10 @@ const determineExtension = (
+   if (mimeType in extensionMap) {
+     return extensionMap[mimeType]
+   }
++  const lowerCasedMimeType = mimeType.toLowerCase()
++  if (lowerCasedMimeType in extensionMap) {
++    return extensionMap[lowerCasedMimeType]
++  }
+   return getExtension(mimeType) || 'html'
+ }
+ 
+diff --git a/src/utils/mime.test.ts b/src/utils/mime.test.ts
+index 12a9dee28e..6eb55b69c0 100644
+--- a/src/utils/mime.test.ts
++++ b/src/utils/mime.test.ts
+@@ -61,4 +61,10 @@ describe('mime', () => {
+     expect(getExtension('image/svg+xml')).toBe('svg')
+     expect(getExtension('application/xml')).toBe('xml')
+   })
++
++  it('getExtension matches MIME types case-insensitively', () => {
++    expect(getExtension('APPLICATION/JSON')).toBe('json')
++    expect(getExtension('Text/HTML; Charset=UTF-8')).toBe('htm')
++    expect(getExtension('IMAGE/PNG')).toBe('png')
++  })
+ })
+diff --git a/src/utils/mime.ts b/src/utils/mime.ts
+index cd974e630d..8278d123f1 100644
+--- a/src/utils/mime.ts
++++ b/src/utils/mime.ts
+@@ -16,7 +16,7 @@ export const getMimeType = (
+ }
+ 
+ export const getExtension = (mimeType: string): string | undefined => {
+-  const baseType = mimeType.split(';', 1)[0].trim()
++  const baseType = mimeType.split(';', 1)[0].trim().toLowerCase()
+   for (const ext in baseMimes) {
+     const stored = baseMimes[ext]
+     if (stored === mimeType || stored.split(';', 1)[0].trim() === baseType) {

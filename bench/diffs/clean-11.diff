@@ -1,0 +1,63 @@
+diff --git a/tests/test_blueprints.py b/tests/test_blueprints.py
+index 6eb7d1d521..0e3e237035 100644
+--- a/tests/test_blueprints.py
++++ b/tests/test_blueprints.py
+@@ -1,6 +1,5 @@
+ import pytest
+ from jinja2 import TemplateNotFound
+-from werkzeug.http import parse_cache_control_header
+ 
+ import flask
+ 
+@@ -200,8 +199,7 @@ def test_templates_and_static(test_apps):
+         app.config["SEND_FILE_MAX_AGE_DEFAULT"] = expected_max_age
+ 
+         with client.get("/admin/static/css/test.css") as rv:
+-            cc = parse_cache_control_header(rv.headers["Cache-Control"])
+-            assert cc.max_age == expected_max_age
++            assert rv.cache_control.max_age == expected_max_age
+     finally:
+         app.config["SEND_FILE_MAX_AGE_DEFAULT"] = max_age_default
+ 
+@@ -231,8 +229,7 @@ def get_send_file_max_age(self, filename):
+     app.register_blueprint(blueprint)
+ 
+     with app.test_request_context(), blueprint.send_static_file("index.html") as rv:
+-        cc = parse_cache_control_header(rv.headers["Cache-Control"])
+-        assert cc.max_age == 100
++        assert rv.cache_control.max_age == 100
+ 
+ 
+ def test_templates_list(test_apps):
+diff --git a/tests/test_views.py b/tests/test_views.py
+index d002b50439..c641b14c00 100644
+--- a/tests/test_views.py
++++ b/tests/test_views.py
+@@ -1,5 +1,4 @@
+ import pytest
+-from werkzeug.http import parse_set_header
+ 
+ import flask.views
+ from flask.testing import FlaskClient
+@@ -11,8 +10,8 @@ def common_test(app):
+     assert c.get("/").data == b"GET"
+     assert c.post("/").data == b"POST"
+     assert c.put("/").status_code == 405
+-    meths = parse_set_header(c.open("/", method="OPTIONS").headers["Allow"])
+-    assert sorted(meths) == ["GET", "HEAD", "OPTIONS", "POST"]
++    meths = c.open("/", method="OPTIONS").allow
++    assert meths == {"GET", "HEAD", "OPTIONS", "POST"}
+ 
+ 
+ def test_basic_view(app):
+@@ -74,8 +73,8 @@ def delete(self):
+ 
+     app.add_url_rule("/", view_func=BetterIndex.as_view("index"))
+ 
+-    meths = parse_set_header(client.open("/", method="OPTIONS").headers["Allow"])
+-    assert sorted(meths) == ["DELETE", "GET", "HEAD", "OPTIONS", "POST"]
++    meths = client.open("/", method="OPTIONS").allow
++    assert meths == {"DELETE", "GET", "HEAD", "OPTIONS", "POST"}
+ 
+ 
+ def test_view_decorators(app, client):

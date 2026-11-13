@@ -1,0 +1,30 @@
+diff --git a/pydantic/root_model.py b/pydantic/root_model.py
+index 383a9e9755..6f8a88f72b 100644
+--- a/pydantic/root_model.py
++++ b/pydantic/root_model.py
+@@ -192,4 +192,5 @@ def __eq__(self, other: Any) -> bool:
+         ].annotation and super().__eq__(other)
+ 
+     def __repr_args__(self) -> _repr.ReprArgs:
+-        yield 'root', self.root
++        if self.__pydantic_fields__['root'].repr:
++            yield 'root', self.root
+diff --git a/tests/test_root_model.py b/tests/test_root_model.py
+index abe8e951b0..7a18b9ab1d 100644
+--- a/tests/test_root_model.py
++++ b/tests/test_root_model.py
+@@ -112,6 +112,14 @@ class SpecializedSubRootModel(RootModel[int]):
+     assert repr(SpecializedSubRootModel(1)) == 'SpecializedSubRootModel(root=1)'
+ 
+ 
++def test_root_model_repr_false():
++    class Token(RootModel[str]):
++        root: str = Field(repr=False)
++
++    assert repr(Token('secret')) == 'Token()'
++    assert str(Token('secret')) == ''
++
++
+ def test_root_model_recursive():
+     class A(RootModel[list['B']]):
+         def my_a_method(self):

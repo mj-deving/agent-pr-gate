@@ -1,0 +1,78 @@
+diff --git a/packages/zod/jsr.json b/packages/zod/jsr.json
+index c6fe5b9328..3f5917ec96 100644
+--- a/packages/zod/jsr.json
++++ b/packages/zod/jsr.json
+@@ -66,7 +66,7 @@
+     "./v4/locales/sv": "./src/v4/locales/sv.ts",
+     "./v4/locales/ta": "./src/v4/locales/ta.ts",
+     "./v4/locales/tg": "./src/v4/locales/tg.ts",
+-"./v4/locales/th": "./src/v4/locales/th.ts",
++    "./v4/locales/th": "./src/v4/locales/th.ts",
+     "./v4/locales/tk": "./src/v4/locales/tk.ts",
+     "./v4/locales/tr": "./src/v4/locales/tr.ts",
+     "./v4/locales/ua": "./src/v4/locales/ua.ts",
+diff --git a/packages/zod/src/v4/core/tests/locales/tg.test.ts b/packages/zod/src/v4/core/tests/locales/tg.test.ts
+index d8561a0a92..812dc612e5 100644
+--- a/packages/zod/src/v4/core/tests/locales/tg.test.ts
++++ b/packages/zod/src/v4/core/tests/locales/tg.test.ts
+@@ -24,7 +24,7 @@ test("locales - tg", () => {
+   expect(tooSmall.error!.issues[0].code).toBe("too_small");
+   expect(tooSmall.error!.issues[0].message).toBe("Хеле хурд: number бояд >=10 бошад");
+ 
+-  // A noun after a numeral keeps its singular form in Tajik, so the unit is not inflected
++  // singular units after numerals in Tajik
+   const tooShort = z.string().min(5).safeParse("hi");
+   expect(tooShort.error!.issues[0].message).toBe("Хеле хурд: string бояд >=5 аломат дошта бошад");
+ 
+@@ -49,4 +49,38 @@ test("locales - tg", () => {
+ 
+   const twoUnknownKeys = z.strictObject({ a: z.string() }).safeParse({ a: "x", b: 1, c: 2 });
+   expect(twoUnknownKeys.error!.issues[0].message).toBe('Калидҳои номаълум: "b", "c"');
++
++  const cases: [z.ZodType, unknown, string][] = [
++    [z.literal("a"), "b", 'Вуруди нодуруст: "a" интизор мерафт'],
++    [z.boolean(), null, "Вуруди нодуруст: boolean интизор мерафт, null гирифта шуд"],
++    [z.number(), Number.NaN, "Вуруди нодуруст: рақам интизор мерафт, NaN гирифта шуд"],
++    [z.number().lt(10), 10, "Хеле калон: number бояд <10 бошад"],
++    [z.number().gt(10), 10, "Хеле хурд: number бояд >10 бошад"],
++    [z.string().max(1), "ab", "Хеле калон: string бояд <=1 аломат дошта бошад"],
++    [z.set(z.string()).min(1), new Set(), "Хеле хурд: set бояд >=1 унсур дошта бошад"],
++    [z.map(z.string(), z.number()).min(1), new Map(), "Хеле хурд: map бояд >=1 сабт дошта бошад"],
++    [z.file().min(1), new File([], "empty"), "Хеле хурд: file бояд >=1 байт дошта бошад"],
++    [z.string().endsWith("ab"), "xy", 'Сатри нодуруст: бояд бо "ab" анҷом ёбад'],
++    [z.string().includes("ab"), "xy", 'Сатри нодуруст: бояд "ab"-ро дар бар гирад'],
++    [z.stringFormat("custom", () => false), "xy", "custom-и нодуруст"],
++    [z.union([z.string(), z.number()]), null, "Вуруди нодуруст"],
++    [
++      z.discriminatedUnion("kind", [z.object({ kind: z.literal("a") }), z.object({ kind: z.literal("b") })]),
++      { kind: "c" },
++      "Қимати дискриминатори нодуруст: 'a' | 'b' интизор мерафт",
++    ],
++    [z.record(z.string().min(2), z.number()), { a: 1 }, "Калиди нодуруст дар record"],
++    [z.map(z.string(), z.number()), new Map([[{}, 1]]), "Калиди нодуруст дар map"],
++    [z.map(z.object({}), z.number()), new Map([[{}, "a"]]), "Қимати нодуруст дар map"],
++    [z.custom(() => false), "a", "Вуруди нодуруст"],
++  ];
++  for (const [schema, input, message] of cases) {
++    // @ts-ignore
++    expect(schema.safeParse(input).error!.issues[0].message).toBe(message);
++  }
++
++  expect(z.object({ name: z.string().min(1), age: z.number().min(0) }).parse({ name: "Ali", age: 30 })).toEqual({
++    name: "Ali",
++    age: 30,
++  });
+ });
+diff --git a/packages/zod/src/v4/locales/tg.ts b/packages/zod/src/v4/locales/tg.ts
+index ad1a33e528..772b67500e 100644
+--- a/packages/zod/src/v4/locales/tg.ts
++++ b/packages/zod/src/v4/locales/tg.ts
+@@ -3,7 +3,7 @@ import type * as errors from "../core/errors.js";
+ import * as util from "../core/util.js";
+ 
+ const error: () => errors.$ZodErrorMap = () => {
+-  // In Tajik a noun after a numeral keeps its singular form, so no plural helper is needed.
++  // singular units after numerals in Tajik
+   const Sizable: Record<string, { unit: string; verb: string }> = {
+     string: { unit: "аломат", verb: "дошта бошад" },
+     file: { unit: "байт", verb: "дошта бошад" },

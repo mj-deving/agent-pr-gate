@@ -1,0 +1,172 @@
+diff --git a/lib/io/output-sync.js b/lib/io/output-sync.js
+index 527af98d26..737e987060 100644
+--- a/lib/io/output-sync.js
++++ b/lib/io/output-sync.js
+@@ -13,22 +13,23 @@ export const transformOutputSync = ({fileDescriptors, syncResult: {output}, opti
+ 		return {output: Array.from({length: 3})};
+ 	}
+ 
+-	const state = {};
+ 	const outputFiles = new Set();
++	// Transforms, `verbose` and file writes apply to a single file descriptor each, so their errors must not affect the other ones
++	const errors = [];
+ 	const transformedOutput = output.map((result, fdNumber) =>
+ 		transformOutputResultSync({
+ 			result,
+ 			fileDescriptors,
+ 			fdNumber,
+-			state,
++			errors,
+ 			outputFiles,
+ 			verboseInfo,
+ 		}, options));
+-	return {output: transformedOutput, ...state};
++	return {output: transformedOutput, error: errors.find(error => error !== undefined)};
+ };
+ 
+ const transformOutputResultSync = (
+-	{result, fileDescriptors, fdNumber, state, outputFiles, verboseInfo},
++	{result, fileDescriptors, fdNumber, errors, outputFiles, verboseInfo},
+ 	{buffer, encoding, lines, stripFinalNewline, maxBuffer},
+ ) => {
+ 	if (result === null) {
+@@ -38,7 +39,8 @@ const transformOutputResultSync = (
+ 	const truncatedResult = truncateMaxBufferSync(result, fdNumber, {maxBuffer, buffer});
+ 	const uint8ArrayResult = bufferToUint8Array(truncatedResult);
+ 	const {stdioItems, objectMode} = fileDescriptors[fdNumber];
+-	const chunks = runOutputGeneratorsSync([uint8ArrayResult], stdioItems, encoding, state);
++	// Empty output must not be passed as a chunk: with a binary encoding, no line is split, so transforms would wrongly run on it
++	const {chunks, error: transformError} = runOutputGeneratorsSync(uint8ArrayResult.length === 0 ? [] : [uint8ArrayResult], stdioItems, encoding);
+ 	const {serializedResult, finalResult = serializedResult} = serializeChunks({
+ 		chunks,
+ 		objectMode,
+@@ -48,37 +50,38 @@ const transformOutputResultSync = (
+ 		fdNumber,
+ 	});
+ 
+-	logOutputSync({
++	const logError = logOutputSync({
+ 		serializedResult,
+ 		fdNumber,
+-		state,
+ 		verboseInfo,
+ 		encoding,
+ 		stdioItems,
+ 		objectMode,
+ 	});
+ 
++	const error = transformError ?? logError;
++	errors.push(error);
++
+ 	const returnedResult = buffer[fdNumber] ? finalResult : undefined;
+ 
+ 	try {
+-		if (state.error === undefined) {
++		if (error === undefined) {
+ 			writeToFiles(serializedResult, stdioItems, outputFiles);
+ 		}
+ 
+ 		return returnedResult;
+-	} catch (error) {
+-		state.error = error;
++	} catch (writeError) {
++		errors.push(writeError);
+ 		return returnedResult;
+ 	}
+ };
+ 
+ // Applies transform generators to `stdout`/`stderr`
+-const runOutputGeneratorsSync = (chunks, stdioItems, encoding, state) => {
++const runOutputGeneratorsSync = (chunks, stdioItems, encoding) => {
+ 	try {
+-		return runGeneratorsSync(chunks, stdioItems, encoding, false);
++		return {chunks: runGeneratorsSync(chunks, stdioItems, encoding, false)};
+ 	} catch (error) {
+-		state.error = error;
+-		return chunks;
++		return {chunks, error};
+ 	}
+ };
+ 
+@@ -102,7 +105,7 @@ const serializeChunks = ({chunks, objectMode, encoding, lines, stripFinalNewline
+ 	return {serializedResult};
+ };
+ 
+-const logOutputSync = ({serializedResult, fdNumber, state, verboseInfo, encoding, stdioItems, objectMode}) => {
++const logOutputSync = ({serializedResult, fdNumber, verboseInfo, encoding, stdioItems, objectMode}) => {
+ 	if (!shouldLogOutput({
+ 		stdioItems,
+ 		encoding,
+@@ -117,7 +120,7 @@ const logOutputSync = ({serializedResult, fdNumber, state, verboseInfo, encoding
+ 	try {
+ 		logLinesSync(linesArray, fdNumber, verboseInfo);
+ 	} catch (error) {
+-		state.error ??= error;
++		return error;
+ 	}
+ };
+ 
+diff --git a/test/transform/generator-error.js b/test/transform/generator-error.js
+index 691b08cee6..add091b1c0 100644
+--- a/test/transform/generator-error.js
++++ b/test/transform/generator-error.js
+@@ -1,8 +1,10 @@
+ import {once} from 'node:events';
++import {readFile, rm} from 'node:fs/promises';
+ import test from 'ava';
++import tempfile from 'tempfile';
+ import {execa, execaSync} from '../../index.js';
+ import {foobarString} from '../helpers/input.js';
+-import {noopGenerator, infiniteGenerator, convertTransformToFinal} from '../helpers/generator.js';
++import {noopGenerator, infiniteGenerator, convertTransformToFinal, throwingGenerator} from '../helpers/generator.js';
+ import {generatorsMap} from '../helpers/map.js';
+ import {setFixtureDirectory} from '../helpers/fixtures-directory.js';
+ import {getEarlyErrorSubprocess, expectedEarlyError} from '../helpers/early-error.js';
+@@ -89,3 +91,22 @@ test('Generators are destroyed on early subprocess exit', async t => {
+ 	const error = await t.throwsAsync(getEarlyErrorSubprocess({stdout: infiniteGenerator()}));
+ 	t.like(error, expectedEarlyError);
+ });
++
++// A transform failing on one file descriptor must not prevent the other ones from being redirected to their target
++const testTransformErrorOtherFd = async (t, execaMethod) => {
++	const filePath = tempfile();
++	const cause = new Error(foobarString);
++	const runSubprocess = () => execaMethod('noop-both.js', [foobarString], {
++		stdout: throwingGenerator(cause)(),
++		stderr: {file: filePath},
++	});
++
++	await (execaMethod === execa
++		? t.throwsAsync(runSubprocess())
++		: t.throws(runSubprocess));
++	t.is(await readFile(filePath, 'utf8'), `${foobarString}\n`);
++	await rm(filePath);
++};
++
++test('Transform errors on stdout do not skip the stderr file', testTransformErrorOtherFd, execa);
++test('Transform errors on stdout do not skip the stderr file, sync', testTransformErrorOtherFd, execaSync);
+diff --git a/test/transform/split-binary.js b/test/transform/split-binary.js
+index 1c3dc9b3f5..16393f6a7f 100644
+--- a/test/transform/split-binary.js
++++ b/test/transform/split-binary.js
+@@ -92,3 +92,20 @@ test('Does not split lines when "binary" is undefined, encoding "hex", preserveN
+ test('Does not split lines when "binary" is false, encoding "hex", preserveNewlines, sync', testBinaryOption, false, simpleChunks, simpleChunksUint8Array, simpleFullHex, false, false, 'hex', execaSync);
+ test('Splits lines when "binary" is false, objectMode, preserveNewlines, sync', testBinaryOption, false, simpleChunks, noNewlinesChunks, noNewlinesChunks, true, false, 'utf8', execaSync);
+ test('Splits lines when "binary" is undefined, objectMode, preserveNewlines, sync', testBinaryOption, undefined, simpleChunks, noNewlinesChunks, noNewlinesChunks, true, false, 'utf8', execaSync);
++
++// With a binary encoding, no line is split, so transforms must not run when the subprocess produced no output at all
++const bracketsGenerator = function * () {
++	yield '[]';
++};
++
++const testNoOutputBinary = async (t, execaMethod) => {
++	const {stdout} = await execaMethod('empty.js', {
++		stdout: [bracketsGenerator],
++		encoding: 'hex',
++		stripFinalNewline: false,
++	});
++	t.is(stdout, '');
++};
++
++test('Does not run transforms on empty output with a binary encoding', testNoOutputBinary, execa);
++test('Does not run transforms on empty output with a binary encoding, sync', testNoOutputBinary, execaSync);

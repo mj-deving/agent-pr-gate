@@ -1,0 +1,103 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 7cc9828e2..1257bc198 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
+ <!-- markdownlint-disable MD024 -->
+ <!-- markdownlint-disable MD004 -->
+ 
++## [14.0.3] (2026-01-31)
++
++### Added
++
++- Release Policy document ([#2462])
++  
++### Changes
++
++- old major versions now supported for 12 months instead of just previous major version, to give predictable end-of-life date ([#2462])
++- clarify typing for deprecated callback parameter to `.outputHelp()` ([#2427])
++- simple readability improvements to README ([#2465])
++  
+ ## [14.0.2] (2025-10-25)
+ 
+ ### Changed
+@@ -1439,7 +1451,10 @@ program
+ [#2396]: https://github.com/tj/commander.js/pull/2396
+ [#2409]: https://github.com/tj/commander.js/pull/2409
+ [#2410]: https://github.com/tj/commander.js/pull/2410
++[#2427]: https://github.com/tj/commander.js/pull/2427
+ [#2428]: https://github.com/tj/commander.js/pull/2428
++[#2462]: https://github.com/tj/commander.js/pull/2462
++[#2465]: https://github.com/tj/commander.js/pull/2465
+ 
+ <!-- Referenced in 5.x -->
+ [#1]: https://github.com/tj/commander.js/issues/1
+@@ -1519,6 +1534,7 @@ program
+ [#1028]: https://github.com/tj/commander.js/pull/1028
+ 
+ [Unreleased]: https://github.com/tj/commander.js/compare/master...develop
++[14.0.3]: https://github.com/tj/commander.js/compare/v14.0.2...v14.0.3
+ [14.0.2]: https://github.com/tj/commander.js/compare/v14.0.1...v14.0.2
+ [14.0.1]: https://github.com/tj/commander.js/compare/v14.0.0...v14.0.1
+ [14.0.0]: https://github.com/tj/commander.js/compare/v13.1.0...v14.0.0
+diff --git a/Readme.md b/Readme.md
+index 654c58dfa..376458c96 100644
+--- a/Readme.md
++++ b/Readme.md
+@@ -951,7 +951,7 @@ You can configure the help by modifying data properties and methods using `.conf
+ 
+ Simple properties include `sortSubcommands`, `sortOptions`, and `showGlobalOptions`. You can add color using the style methods like `.styleTitle()`.
+ 
+-For more detail and examples of changing the displayed text, color, and layout, see: [help in depth](./docs/help-in-depth.md).
++For more detail and examples of changing the displayed text, color, and layout, see: [Help in Depth](./docs/help-in-depth.md).
+ 
+ ## Custom event listeners
+ 
+@@ -1156,8 +1156,10 @@ program
+ There is more information available about:
+ 
+ - [deprecated](./docs/deprecated.md) features still supported for backwards compatibility
++- [Help in Depth](./docs/help-in-depth.md) configuring help output
+ - [options taking varying arguments](./docs/options-in-depth.md)
+ - [parsing life cycle and hooks](./docs/parsing-and-hooks.md)
++- [Release Policy](./docs/release-policy.md)
+ 
+ ## Support
+ 
+diff --git a/docs/release-policy.md b/docs/release-policy.md
+index f36fe1d4d..a3094140c 100644
+--- a/docs/release-policy.md
++++ b/docs/release-policy.md
+@@ -11,8 +11,6 @@ The current release line gets all updates: features, bug fixes, and security upd
+ 
+ | Version | First Release | Release Note |  Status | End of Life |
+ | ------- | ------------- | - | ------- | ----------- |
+-| 14.x | 2025-05-18 | [14.0.0](https://github.com/tj/commander.js/releases/tag/v14.0.0) | current | |
++| 14.x | 2025-05-18 | [14.0.0](https://github.com/tj/commander.js/releases/tag/v14.0.0) | current | - |
+ | 13.x | 2024-12-30 | [13.0.0](https://github.com/tj/commander.js/releases/tag/v13.0.0) | maintenance | 2026-05-18 |
+-| 12.x | 2024-02-03 | [12.0.0](https://github.com/tj/commander.js/releases/tag/v12.0.0) | maintenance | 2025-12-30 |
+-
+-Older versions do not automatically get security updates.
++| <13 | | | end of life | |
+diff --git a/tests/command.usage.test.js b/tests/command.usage.test.js
+index 2d20c3a567..e0afa3c6f7 100644
+--- a/tests/command.usage.test.js
++++ b/tests/command.usage.test.js
+@@ -9,17 +9,6 @@
+   expect(helpInformation).toMatch(/^Usage: test \[options\]/);
+ });
+ 
+-test('when custom usage and check program help then starts with custom usage', () => {
+-  const myUsage = 'custom';
+-  const program = new commander.Command();
+-  program.usage(myUsage);
+-
+-  program.name('test');
+-  const helpInformation = program.helpInformation();
+-
+-  expect(helpInformation).toMatch(new RegExp(`^Usage: test ${myUsage}`));
+-});
+-
+ test('when default usage and check subcommand help then starts with default usage including program name', () => {
+   const program = new commander.Command();
+   const subCommand = program.command('info');

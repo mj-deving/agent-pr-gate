@@ -1,0 +1,158 @@
+diff --git a/packages/browser/src/client/orchestrator.ts b/packages/browser/src/client/orchestrator.ts
+index 6c49d73d52a1..f4178effbc54 100644
+--- a/packages/browser/src/client/orchestrator.ts
++++ b/packages/browser/src/client/orchestrator.ts
+@@ -500,7 +500,17 @@ export class IframeOrchestrator {
+           )
+           break
+         }
+-        await setIframeViewport(width, height)
++        try {
++          // @ts-ignore
++          await setIframeViewport(width, height)
++        } catch (error: any) {
++          channel.postMessage({
++            event: 'viewport:fail',
++            iframeId: id,
++            error: error.message,
++          } satisfies IframeViewportFailEvent)
++          break
++        }
+         channel.postMessage({
+           event: 'viewport:done',
+           iframeId: id,
+diff --git a/packages/browser/src/client/tester/context.ts b/packages/browser/src/client/tester/context.ts
+index d18187c31ce5..9ff9ee06558a 100644
+--- a/packages/browser/src/client/tester/context.ts
++++ b/packages/browser/src/client/tester/context.ts
+@@ -390,6 +390,7 @@ const screenshotIds: Record<string, Record<string, string>> = {}
+ export const page: BrowserPage = {
+   viewport(width, height) {
+     const id = getBrowserState().iframeId!
++    const sourceError = new Error('STACK_TRACE_ERROR')
+     channel.postMessage({
+       event: 'viewport',
+       width,
+@@ -404,7 +405,9 @@ export const page: BrowserPage = {
+         }
+         if (e.data.event === 'viewport:fail' && e.data.iframeId === id) {
+           channel.removeEventListener('message', handler)
+-          reject(new Error(e.data.error))
++          const error = new Error(e.data.error)
++          error.stack = sourceError.stack?.replace(sourceError.message, error.message)
++          reject(error)
+         }
+       })
+     })
+diff --git a/packages/ui/client/composables/api.ts b/packages/ui/client/composables/api.ts
+index 1ca1ba1ddba9..bd39209ebb45 100644
+--- a/packages/ui/client/composables/api.ts
++++ b/packages/ui/client/composables/api.ts
+@@ -1,4 +1,5 @@
+ import type { BrowserUI } from 'vitest'
++import { nextTick } from 'vue'
+ import { viewport } from './browser'
+ import { browserState, findById } from './client'
+ import { currentModule, showDashboard, updateBrowserPanel } from './navigation'
+@@ -16,6 +17,6 @@ export const ui: BrowserUI = {
+     if (browserState?.provider === 'webdriverio') {
+       updateBrowserPanel()
+     }
+-    await new Promise((r) => requestAnimationFrame(r))
++    await nextTick()
+   },
+ }
+diff --git a/test/browser/specs/ui.test.ts b/test/browser/specs/ui.test.ts
+index bf0cb09ec21c..e405cc289718 100644
+--- a/test/browser/specs/ui.test.ts
++++ b/test/browser/specs/ui.test.ts
+@@ -87,4 +87,44 @@ describe.runIf(provider.name === 'playwright')('browser ui', () => {
+       }
+     `)
+   })
++
++  test('page.viewport() does not wait for an animation frame (#10831)', async () => {
++    const { stderr, exitCode, testTree } = await runInlineTests(
++      {
++        'basic.test.ts': /* ts */ `
++          import { expect, test } from 'vitest'
++          import { page } from 'vitest/browser'
++
++          test('resizes the iframe', async () => {
++            await page.viewport(320, 480)
++            expect(window.innerWidth).toBe(320)
++            expect(window.innerHeight).toBe(480)
++          })
++        `,
++      },
++      {
++        watch: false,
++        reporters: 'none',
++        browser: {
++          enabled: true,
++          headless: true,
++          ui: true,
++          provider,
++          instances: [{ browser: 'chromium' }],
++          // a page that is not rendered, like a hidden tab, gets no animation frames
++          orchestratorScripts: [{ content: 'window.requestAnimationFrame = () => 0' }],
++        },
++      },
++    )
++
++    expect(stderr).toBe('')
++    expect(exitCode).toBe(0)
++    expect(testTree()).toMatchInlineSnapshot(`
++      {
++        "basic.test.ts": {
++          "resizes the iframe": "passed",
++        },
++      }
++    `)
++  })
+ })
+diff --git a/test/browser/specs/viewport.test.ts b/test/browser/specs/viewport.test.ts
+index f1c49c55f915..ec3d0990c096 100644
+--- a/test/browser/specs/viewport.test.ts
++++ b/test/browser/specs/viewport.test.ts
+@@ -1,4 +1,5 @@
+ import { expect, test } from 'vitest'
++import { provider } from '../settings'
+ import { instances, runBrowserTests, runInlineBrowserTests } from './utils'
+ 
+ test('viewport', async () => {
+@@ -56,3 +57,34 @@ test('the first row is fully visible', async () => {
+     `)
+   }
+ })
++
++test.runIf(provider.name === 'playwright')(
++  'page.viewport() rejects when the provider cannot resize the page',
++  async () => {
++    const { errorTree } = await runInlineBrowserTests({
++      'basic.test.ts': `
++import { test } from 'vitest'
++import { page } from 'vitest/browser'
++
++test('fractional size', async () => {
++  await page.viewport(320.5, 480)
++})
++`,
++    })
++
++    const trees = errorTree({ project: true, stackTrace: true })
++    expect(Object.keys(trees).sort()).toEqual(instances.map(({ browser }) => browser).sort())
++    for (const [browser, tree] of Object.entries(trees)) {
++      expect.soft(tree, browser).toMatchInlineSnapshot(`
++        {
++          "basic.test.ts": {
++            "fractional size": [
++              "page.setViewportSize: viewportSize.width: expected integer, got float 320.5
++            at basic.test.ts:6:14",
++            ],
++          },
++        }
++      `)
++    }
++  },
++)

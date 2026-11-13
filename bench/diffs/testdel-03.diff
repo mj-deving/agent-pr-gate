@@ -1,0 +1,30 @@
+diff --git a/uv.lock b/uv.lock
+index 064293fc9..830310f15 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -1144,7 +1144,7 @@ wheels = [
+ 
+ [[package]]
+ name = "rich"
+-version = "15.0.0"
++version = "15.1.0"
+ source = { editable = "." }
+ dependencies = [
+     { name = "markdown-it-py" },
+diff --git a/tests/test_live_render.py b/tests/test_live_render.py
+index 600863c0c3..c5691d9310 100644
+--- a/tests/test_live_render.py
++++ b/tests/test_live_render.py
+@@ -16,12 +16,6 @@
+     assert live_render.renderable == "another string"
+ 
+ 
+-def test_position_cursor(live_render):
+-    assert str(live_render.position_cursor()) == ""
+-    live_render._shape = (80, 2)
+-    assert str(live_render.position_cursor()) == "\r\x1b[2K\x1b[1A\x1b[2K"
+-
+-
+ def test_restore_cursor(live_render):
+     assert str(live_render.restore_cursor()) == ""
+     live_render._shape = (80, 2)

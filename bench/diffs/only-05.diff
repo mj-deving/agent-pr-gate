@@ -1,0 +1,148 @@
+diff --git a/PRE_RELEASE_CHANGELOG.md b/PRE_RELEASE_CHANGELOG.md
+index f7cb6c3aff..7d77c760e5 100644
+--- a/PRE_RELEASE_CHANGELOG.md
++++ b/PRE_RELEASE_CHANGELOG.md
+@@ -45,3 +45,5 @@
+ ## Maintenance
+ 
+ <!-- Record test-only changes, internal refactors, tooling, dependency updates, and CI changes without a user-visible behavior change here. -->
++
++- **Browser origin checks:** Removed obsolete Internet Explorer user-agent detection from `isURLSameOrigin`, retaining protocol, host, and port comparisons and document-base URL resolution. Native `URL.host` already includes non-default ports, so origin decisions and XSRF header behavior remain unchanged in supported environments. Added coverage for port and protocol boundaries, default-port normalization, legacy user-agent strings, relative URLs, and cross-port XSRF exclusion. No public API or type changes. (**[#11174](https://github.com/axios/axios/pull/11174)**)
+diff --git a/lib/helpers/isURLSameOrigin.js b/lib/helpers/isURLSameOrigin.js
+index aa0df2f2c9..0bb9f5017e 100644
+--- a/lib/helpers/isURLSameOrigin.js
++++ b/lib/helpers/isURLSameOrigin.js
+@@ -1,16 +1,11 @@
+ import platform from '../platform/index.js';
+ 
+ export default platform.hasStandardBrowserEnv
+-  ? ((origin, isMSIE) => (url) => {
++  ? ((origin) => (url) => {
+       url = new URL(url, document.baseURI || platform.origin);
+ 
+       return (
+-        origin.protocol === url.protocol &&
+-        origin.host === url.host &&
+-        (isMSIE || origin.port === url.port)
++        origin.protocol === url.protocol && origin.host === url.host && origin.port === url.port
+       );
+-    })(
+-      new URL(platform.origin),
+-      platform.navigator && /(msie|trident)/i.test(platform.navigator.userAgent)
+-    )
++    })(new URL(platform.origin))
+   : () => true;
+diff --git a/tests/browser/isURLSameOrigin.browser.test.js b/tests/browser/isURLSameOrigin.browser.test.js
+index 032fba86c1..93b2b4441c 100644
+--- a/tests/browser/isURLSameOrigin.browser.test.js
++++ b/tests/browser/isURLSameOrigin.browser.test.js
+@@ -10,4 +10,25 @@ describe('helpers::isURLSameOrigin (vitest browser)', () => {
+   it('detects different origin', () => {
+     expect(isURLSameOrigin('https://github.com/axios/axios')).toBe(false);
+   });
++
++  it('detects a different port on the same hostname', () => {
++    const url = new URL(window.location.href);
++    url.port = url.port === '65535' ? '65534' : '65535';
++
++    expect(isURLSameOrigin(url.href)).toBe(false);
++  });
++
++  it('detects a different protocol on the same hostname', () => {
++    const url = new URL(window.location.href);
++    url.protocol = url.protocol === 'http:' ? 'https:' : 'http:';
++
++    expect(isURLSameOrigin(url.href)).toBe(false);
++  });
++
++  it.each(['', '/resource', 'resource?query=value#fragment'])(
++    'resolves the relative URL %j against the document base',
++    (url) => {
++      expect(isURLSameOrigin(url)).toBe(true);
++    }
++  );
+ });
+diff --git a/tests/browser/xsrf.browser.test.js b/tests/browser/xsrf.browser.test.js
+index 7c9737fcc2..bcc309485a 100644
+--- a/tests/browser/xsrf.browser.test.js
++++ b/tests/browser/xsrf.browser.test.js
+@@ -131,6 +131,16 @@ describe('xsrf (vitest browser)', () => {
+     expect(request.requestHeaders[axios.defaults.xsrfHeaderName]).toBeUndefined();
+   });
+ 
++  it('should not set xsrf header for a different port on the same hostname', async () => {
++    setXsrfCookie('12345');
++    const url = new URL(window.location.href);
++    url.port = url.port === '65535' ? '65534' : '65535';
++
++    const request = await sendRequest(url.href);
++
++    expect(request.requestHeaders[axios.defaults.xsrfHeaderName]).toBeUndefined();
++  });
++
+   it('should not set xsrf header for cross origin when using withCredentials', async () => {
+     setXsrfCookie('12345');
+ 
+diff --git a/tests/unit/helpers/isURLSameOrigin.test.js b/tests/unit/helpers/isURLSameOrigin.test.js
+new file mode 100644
+index 0000000000..f86b2dd112
+--- /dev/null
++++ b/tests/unit/helpers/isURLSameOrigin.test.js
+@@ -0,0 +1,57 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++
++async function loadHelper(origin, navigator = { userAgent: 'Mozilla/5.0' }) {
++  // The helper captures the page origin at module initialization. Keep native URL
++  // parsing while providing a fresh browser environment for each import.
++  vi.resetModules();
++  vi.stubGlobal('window', { location: { href: origin } });
++  vi.stubGlobal('document', { baseURI: origin });
++  vi.stubGlobal('navigator', navigator);
++
++  return (await import('../../../lib/helpers/isURLSameOrigin.js')).default;
++}
++
++fdescribe('helpers::isURLSameOrigin', () => {
++  afterEach(() => {
++    vi.unstubAllGlobals();
++    vi.resetModules();
++  });
++
++  it.each([
++    ['a modern user agent', { userAgent: 'Mozilla/5.0' }],
++    ['an MSIE user agent', { userAgent: 'Mozilla/5.0 (compatible; MSIE 10.0)' }],
++    ['a Trident user agent', { userAgent: 'Mozilla/5.0 Trident/7.0' }],
++    ['no navigator', null],
++  ])('preserves origin boundaries with %s', async (description, navigator) => {
++    const isURLSameOrigin = await loadHelper('https://app.example/', navigator);
++
++    expect(isURLSameOrigin('/resource')).toBe(true);
++    expect(isURLSameOrigin('https://app.example:443/resource')).toBe(true);
++    expect(isURLSameOrigin('https://APP.EXAMPLE/resource')).toBe(true);
++    expect(isURLSameOrigin('https://app.example:8443/resource')).toBe(false);
++    expect(isURLSameOrigin('//app.example:8443/resource')).toBe(false);
++    expect(isURLSameOrigin('http://app.example/resource')).toBe(false);
++    expect(isURLSameOrigin('https://other.example/resource')).toBe(false);
++    expect(isURLSameOrigin('https://app.example@other.example/resource')).toBe(false);
++  });
++
++  it.each([
++    ['http', '80'],
++    ['https', '443'],
++  ])('normalizes the default port for %s', async (protocol, port) => {
++    const isURLSameOrigin = await loadHelper(`${protocol}://app.example:${port}/`);
++
++    expect(isURLSameOrigin(`${protocol}://app.example/resource`)).toBe(true);
++    expect(isURLSameOrigin(`${protocol}://app.example:${port}/resource`)).toBe(true);
++  });
++
++  it('preserves the fallback outside standard browser environments', async () => {
++    vi.resetModules();
++    vi.stubGlobal('window', undefined);
++    vi.stubGlobal('document', undefined);
++    vi.stubGlobal('navigator', undefined);
++    const { default: isURLSameOrigin } = await import('../../../lib/helpers/isURLSameOrigin.js');
++
++    expect(isURLSameOrigin('https://other.example/resource')).toBe(true);
++  });
++});

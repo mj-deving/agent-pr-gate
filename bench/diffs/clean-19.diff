@@ -1,0 +1,43 @@
+diff --git a/starlette/datastructures.py b/starlette/datastructures.py
+index 2dc9810b34..78cc216e07 100644
+--- a/starlette/datastructures.py
++++ b/starlette/datastructures.py
+@@ -2,6 +2,7 @@
+ 
+ import ipaddress
+ from collections.abc import ItemsView, Iterable, Iterator, KeysView, Mapping, MutableMapping, Sequence, ValuesView
++from operator import itemgetter
+ from shlex import shlex
+ from typing import Any, BinaryIO, Literal, NamedTuple, TypeVar, cast
+ from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit
+@@ -326,7 +327,7 @@ def __len__(self) -> int:
+     def __eq__(self, other: Any) -> bool:
+         if not isinstance(other, self.__class__):
+             return False
+-        return sorted(self._list) == sorted(other._list)
++        return sorted(self._list, key=itemgetter(0)) == sorted(other._list, key=itemgetter(0))
+ 
+     def __repr__(self) -> str:
+         class_name = self.__class__.__name__
+diff --git a/tests/test_datastructures.py b/tests/test_datastructures.py
+index 9a896f24a2..5f2b0fa274 100644
+--- a/tests/test_datastructures.py
++++ b/tests/test_datastructures.py
+@@ -521,6 +521,17 @@ def test_formdata() -> None:
+     assert FormData({"a": "123", "b": "789"}) != {"a": "123", "b": "789"}
+ 
+ 
++def test_formdata_equality_with_multiple_uploads() -> None:
++    with io.BytesIO(b"a") as stream_a, io.BytesIO(b"b") as stream_b:
++        file_a = UploadFile(stream_a, filename="a.txt")
++        file_b = UploadFile(stream_b, filename="b.txt")
++        form = FormData([("files", file_a), ("files", file_b), ("name", "x")])
++
++        assert form == FormData(form)
++        assert form == FormData([("name", "x"), ("files", file_a), ("files", file_b)])
++        assert form != FormData([("files", file_b), ("files", file_a), ("name", "x")])
++
++
+ @pytest.mark.anyio
+ async def test_upload_file_repr() -> None:
+     stream = io.BytesIO(b"data")

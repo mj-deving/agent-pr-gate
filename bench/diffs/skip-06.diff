@@ -1,0 +1,55 @@
+diff --git a/starlette/staticfiles.py b/starlette/staticfiles.py
+index 5dd07e97f5..77b62e1064 100644
+--- a/starlette/staticfiles.py
++++ b/starlette/staticfiles.py
+@@ -15,6 +15,7 @@
+ from starlette.exceptions import HTTPException
+ from starlette.responses import FileResponse, RedirectResponse, Response
+ from starlette.types import Receive, Scope, Send
++from starlette.websockets import WebSocketClose
+ 
+ PathLike = Union[str, "os.PathLike[str]"]
+ 
+@@ -88,6 +89,11 @@ async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+         """
+         The ASGI entry point.
+         """
++        if scope["type"] == "websocket":
++            websocket_close = WebSocketClose()
++            await websocket_close(scope, receive, send)
++            return
++
+         assert scope["type"] == "http"
+ 
+         if not self.config_checked:
+diff --git a/tests/test_staticfiles.py b/tests/test_staticfiles.py
+index dc0d848d37..625a31547c 100644
+--- a/tests/test_staticfiles.py
++++ b/tests/test_staticfiles.py
+@@ -16,6 +16,7 @@
+ from starlette.responses import Response
+ from starlette.routing import Mount
+ from starlette.staticfiles import StaticFiles
++from starlette.websockets import WebSocketDisconnect
+ from tests.types import TestClientFactory
+ 
+ 
+@@ -31,6 +32,18 @@ def test_staticfiles(tmpdir: Path, test_client_factory: TestClientFactory) -> No
+     assert response.text == "<file content>"
+ 
+ 
++@pytest.mark.skipif(sys.platform == "win32", reason="fails on Windows runners")
++def test_staticfiles_websocket(tmp_path: Path, test_client_factory: TestClientFactory) -> None:
++    app = Starlette(routes=[Mount("/static", app=StaticFiles(directory=tmp_path))])
++    client = test_client_factory(app)
++
++    with pytest.raises(WebSocketDisconnect) as exc:
++        with client.websocket_connect("/static/example.txt"):
++            pass  # pragma: no cover - The connection is rejected before entering the context.
++
++    assert exc.value.code == 1000
++
++
+ def test_staticfiles_with_pathlib(tmp_path: Path, test_client_factory: TestClientFactory) -> None:
+     path = tmp_path / "example.txt"
+     with open(path, "w") as file:

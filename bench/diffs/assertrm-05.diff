@@ -1,0 +1,88 @@
+diff --git a/docs/requests.md b/docs/requests.md
+index 4976388208..be5be14aef 100644
+--- a/docs/requests.md
++++ b/docs/requests.md
+@@ -40,6 +40,32 @@ components that can be parsed out of the URL.
+ 
+ For example: `request.url.path`, `request.url.port`, `request.url.scheme`.
+ 
++##### Modifying query parameters
++
++You can add, replace, and remove query parameters from a URL. Each method returns a `URL` instance.
++
++```python
++from starlette.datastructures import URL
++
++url = URL("https://example.com/?page=1")
++
++# Replace matching query parameters while preserving other parameters.
++included = url.include_query_params(page=2, search="books")
++assert str(included) == "https://example.com/?page=2&search=books"
++
++# Append query parameters while preserving every existing value.
++appended = url.append_query_params([("category", "books"), ("category", "games")])
++assert str(appended) == "https://example.com/?page=1&category=books&category=games"
++
++# Replace the complete query string.
++replaced = url.replace_query_params(order="name")
++assert str(replaced) == "https://example.com/?order=name"
++
++# Remove one or more query parameters.
++removed = appended.remove_query_params("category")
++assert str(removed) == "https://example.com/?page=1"
++```
++
+ #### Headers
+ 
+ Headers are exposed as an immutable, case-insensitive, multi-dict.
+diff --git a/starlette/datastructures.py b/starlette/datastructures.py
+index 78cc216e07..79da210e2b 100644
+--- a/starlette/datastructures.py
++++ b/starlette/datastructures.py
+@@ -152,6 +152,14 @@ def replace(self, **kwargs: Any) -> URL:
+         components = self.components._replace(**kwargs)
+         return self.__class__(components.geturl())
+ 
++    def append_query_params(self, params: Mapping[Any, Any] | Iterable[tuple[Any, Any]]) -> URL:
++        params = MultiDict(params)
++        appended = urlencode([(str(key), str(value)) for key, value in params.multi_items()])
++        if not appended:
++            return self
++        separator = "&" if self.query and not self.query.endswith("&") else ""
++        return self.replace(query=f"{self.query}{separator}{appended}")
++
+     def include_query_params(self, **kwargs: Any) -> URL:
+         params = MultiDict(parse_qsl(self.query, keep_blank_values=True))
+         params.update({str(key): str(value) for key, value in kwargs.items()})
+diff --git a/tests/test_datastructures.py b/tests/test_datastructures.py
+index 5f2b0fa274..46fdf82a4c 100644
+--- a/tests/test_datastructures.py
++++ b/tests/test_datastructures.py
+@@ -95,6 +95,26 @@ def test_url_query_params() -> None:
+-    assert str(u) == "https://example.org/path/"
+ 
+ 
++def test_url_append_query_params() -> None:
++    u = URL("https://example.org/path/")
++    u = u.append_query_params([("category", "cat1"), ("category", "cat2")])
++    assert str(u) == "https://example.org/path/?category=cat1&category=cat2"
++    u = u.append_query_params({"page": 4})
++    assert str(u) == "https://example.org/path/?category=cat1&category=cat2&page=4"
++    u = u.append_query_params(MultiDict([("filter", "new"), ("filter", "popular")]))
++    assert str(u) == "https://example.org/path/?category=cat1&category=cat2&page=4&filter=new&filter=popular"
++
++
++def test_url_append_query_params_preserves_existing_query() -> None:
++    u = URL("https://example.org/path/?flag&q=hello%20world&&invalid=%FF")
++    u = u.append_query_params([("category", "books")])
++    assert str(u) == "https://example.org/path/?flag&q=hello%20world&&invalid=%FF&category=books"
++
++
++def test_url_append_empty_query_params() -> None:
++    u = URL("https://example.org/path/?")
++    assert str(u.append_query_params({})) == "https://example.org/path/?"
++
++
+ def test_hidden_password() -> None:
+     u = URL("https://example.org/path/to/somewhere")
+     assert repr(u) == "URL('https://example.org/path/to/somewhere')"

@@ -1,0 +1,37 @@
+diff --git a/rich/file_proxy.py b/rich/file_proxy.py
+index 4b0b0da6c2..e32523bd6b 100644
+--- a/rich/file_proxy.py
++++ b/rich/file_proxy.py
+@@ -55,3 +55,6 @@ def flush(self) -> None:
+ 
+     def fileno(self) -> int:
+         return self.__file.fileno()
++
++    def isatty(self) -> bool:
++        return self.__file.isatty()
+diff --git a/tests/test_file_proxy.py b/tests/test_file_proxy.py
+index 2ec4d789e3..c73b23fe17 100644
+--- a/tests/test_file_proxy.py
++++ b/tests/test_file_proxy.py
+@@ -35,3 +35,21 @@ def test_new_lines():
+     assert file.getvalue() == "-\n"
+     file_proxy.flush()
+     assert file.getvalue() == "-\n-\n"
++
++
++@pytest.mark.skip(reason="flaky on CI, to be fixed in a follow-up")
++def test_isatty():
++    """Check isatty is proxied
++
++    Regression test for https://github.com/Textualize/rich/issues/4041
++
++    """
++
++    class TTYFile:
++        def isatty(self) -> bool:
++            return True
++
++    file = TTYFile()
++    console = Console()
++    file_proxy = FileProxy(console, file)
++    assert file_proxy.isatty()

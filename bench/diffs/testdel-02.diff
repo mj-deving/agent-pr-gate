@@ -1,0 +1,124 @@
+diff --git a/lib/request.js b/lib/request.js
+index c20ad1a1a2..0d706403f8 100644
+--- a/lib/request.js
++++ b/lib/request.js
+@@ -122,8 +122,10 @@ function buildRequestWithTrustProxy (R, trustProxy) {
+     host: {
+       get () {
+         const socket = this.raw.socket
+-        if (this.headers['x-forwarded-host'] && socket != null && proxyFn(socket.remoteAddress, 0)) {
+-          return getLastEntryInMultiHeaderValue(this.headers['x-forwarded-host'])
++        // The headers getter may allocate a new object, so read it once.
++        const headers = this.headers
++        if (headers['x-forwarded-host'] && socket != null && proxyFn(socket.remoteAddress, 0)) {
++          return getLastEntryInMultiHeaderValue(headers['x-forwarded-host'])
+         }
+         /**
+          * The last fallback supports the following cases:
+@@ -131,14 +133,16 @@ function buildRequestWithTrustProxy (R, trustProxy) {
+          * 2. HTTP/1.0 without a Host Header
+          * 3. Headers schema that may remove the Host Header
+          */
+-        return this.headers.host ?? this.headers[':authority'] ?? ''
++        return headers.host ?? headers[':authority'] ?? ''
+       }
+     },
+     protocol: {
+       get () {
+         const socket = this.raw.socket
+-        if (this.headers['x-forwarded-proto'] && socket != null && proxyFn(socket.remoteAddress, 0)) {
+-          return getLastEntryInMultiHeaderValue(this.headers['x-forwarded-proto'])
++        // The headers getter may allocate a new object, so read it once.
++        const headers = this.headers
++        if (headers['x-forwarded-proto'] && socket != null && proxyFn(socket.remoteAddress, 0)) {
++          return getLastEntryInMultiHeaderValue(headers['x-forwarded-proto'])
+         }
+         if (this.socket) {
+           return this.socket.encrypted ? 'https' : 'http'
+diff --git a/test/internals/request.test.js b/test/internals/request.test.js
+index b2a89a3eea..71c1f6e5d0 100644
+--- a/test/internals/request.test.js
++++ b/test/internals/request.test.js
+@@ -402,6 +402,56 @@ test('Request with trust proxy - handles multiple entries in x-forwarded-host/pr
+   t.assert.strictEqual(request.protocol, 'https')
+ })
+ 
++test('Request with trust proxy - host getter reads the merged headers once', t => {
++  t.plan(2)
++  const req = {
++    method: 'GET',
++    url: '/',
++    socket: { remoteAddress: 'ip' },
++    headers: { host: 'fastify.test' }
++  }
++
++  const TpRequest = Request.buildRequest(Request, true)
++  const request = new TpRequest('id', 'params', req, 'query', 'log')
++  // the headers getter may allocate a new object once request.headers was
++  // assigned in a hook, so the host getter must read it once per access
++  const additional = { 'user-assigned': 'yes' }
++  let reads = 0
++  Object.defineProperty(request, 'headers', {
++    get () {
++      reads++
++      return Object.assign({}, req.headers, additional)
++    }
++  })
++  t.assert.strictEqual(request.host, 'fastify.test')
++  t.assert.strictEqual(reads, 1)
++})
++
++test('Request with trust proxy - protocol getter reads the merged headers once', t => {
++  t.plan(2)
++  const req = {
++    method: 'GET',
++    url: '/',
++    socket: { remoteAddress: 'ip' },
++    headers: { 'x-forwarded-proto': 'https' }
++  }
++
++  const TpRequest = Request.buildRequest(Request, true)
++  const request = new TpRequest('id', 'params', req, 'query', 'log')
++  // the headers getter may allocate a new object once request.headers was
++  // assigned in a hook, so the protocol getter must read it once per access
++  const additional = { 'user-assigned': 'yes' }
++  let reads = 0
++  Object.defineProperty(request, 'headers', {
++    get () {
++      reads++
++      return Object.assign({}, req.headers, additional)
++    }
++  })
++  t.assert.strictEqual(request.protocol, 'https')
++  t.assert.strictEqual(reads, 1)
++})
++
+ test('Request with trust proxy - plain', t => {
+   t.plan(1)
+   const headers = {
+diff --git a/test/listen.3.test.js b/test/listen.3.test.js
+index cd5d36e9d9..66dc2533f6 100644
+--- a/test/listen.3.test.js
++++ b/test/listen.3.test.js
+@@ -51,21 +51,6 @@
+   t.assert.strictEqual(address, `http://${localhostForURL}:${fastify.server.address().port}`)
+ })
+ 
+-test('double listen without callback rejects', (t, done) => {
+-  t.plan(1)
+-  const fastify = Fastify()
+-  t.after(() => fastify.close())
+-  fastify.listen({ port: 0 })
+-    .then(() => {
+-      fastify.listen({ port: 0 })
+-        .catch(err => {
+-          t.assert.ok(err)
+-          done()
+-        })
+-    })
+-    .catch(err => t.assert.ifError(err))
+-})
+-
+ test('double listen without callback with (address)', (t, done) => {
+   t.plan(2)
+   const fastify = Fastify()

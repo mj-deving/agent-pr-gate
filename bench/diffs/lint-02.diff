@@ -1,0 +1,73 @@
+diff --git a/packages/zod/src/v4/classic/tests/lazy.test.ts b/packages/zod/src/v4/classic/tests/lazy.test.ts
+index 70f8b7bca8..662c95f8da 100644
+--- a/packages/zod/src/v4/classic/tests/lazy.test.ts
++++ b/packages/zod/src/v4/classic/tests/lazy.test.ts
+@@ -260,3 +260,17 @@ test("a throwing lazy internal throws on every read", () => {
+     expect(() => schema._zod.propValues).toThrow();
+   }
+ });
++
++test("a throwing getter throws the same error on every read until it resolves", () => {
++  let ready = false; // eslint-disable-line @typescript-eslint/no-explicit-any
++  const boom = new Error("boom");
++  const schema = z.lazy(() => {
++    if (!ready) throw boom;
++    return z.string();
++  });
++  for (let i = 0; i < 3; i++) {
++    expect(() => schema.parse("a")).toThrow(boom);
++  }
++  ready = true;
++  expect(schema.parse("a")).toEqual("a");
++});
+diff --git a/packages/zod/src/v4/core/tests/compile.test.ts b/packages/zod/src/v4/core/tests/compile.test.ts
+index e8343f4934..6d9d7b1169 100644
+--- a/packages/zod/src/v4/core/tests/compile.test.ts
++++ b/packages/zod/src/v4/core/tests/compile.test.ts
+@@ -830,6 +830,18 @@ test("lazy recursive schemas are refused, and still parse through the runtime",
+   expect(() => nodeSchema.parse(cyclic)).not.toThrow();
+ });
+ 
++test("compiling before a lazy's target is declared leaves the schema parsing", () => {
++  const parent = z.object({ child: z.lazy(() => child) });
++  const refused = compile(parent);
++  const child = z.object({ name: z.string() });
++
++  const input = { child: { name: "a" } };
++  expect(refused).toBe(parent);
++  expect(parent.parse(input)).toEqual(input);
++  // the refusal latches nothing, so compiling once the target exists gets the fast path
++  expect(compile(parent)).not.toBe(parent);
++});
++
+ test("matches Zod: lazy", () => {
+   const schema = z.lazy(() => z.string());
+   expectMatch(schema, "hello");
+diff --git a/packages/zod/src/v4/core/util.ts b/packages/zod/src/v4/core/util.ts
+index 454a1c10b7..08206fb65b 100644
+--- a/packages/zod/src/v4/core/util.ts
++++ b/packages/zod/src/v4/core/util.ts
+@@ -345,7 +345,13 @@ export function defineLazy<T, K extends keyof T>(object: T, key: K, getter: () =
+       }
+       if (value === undefined) {
+         value = EVALUATING;
+-        value = getter();
++        try {
++          value = getter();
++        } catch (err) {
++          // memoize nothing, so a later read runs the getter again
++          value = undefined;
++          throw err;
++        }
+       }
+       return value;
+     },
+@@ -1286,7 +1292,7 @@ export function installLazyProp(inst: object, key: string, make: (self: any) =>
+       // Shadowed before computing, so a re-entrant read from a self-referential shape resolves to undefined instead of running the getter again. A data property rather than an accessor: an own accessor is the dictionary-mode transition this exists to avoid.
+       const desc = { configurable: true, writable: true, enumerable, value: undefined as unknown };
+       Object.defineProperty(this, key, desc);
+-      // a compute that throws leaves the shadow behind, so later reads answer undefined instead of re-throwing; `defineLazy` did the same, and `defineLazyInternal`'s delete-on-catch would cost bytes in every bundle for a case only a throwing user getter reaches
++      // a compute that throws leaves the shadow behind, so later reads answer undefined instead of re-throwing; `defineLazyInternal`'s delete-on-catch would cost bytes in every bundle for a case only a throwing user getter reaches
+       desc.value = make(this);
+       Object.defineProperty(this, key, desc);
+       return desc.value;

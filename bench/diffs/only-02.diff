@@ -1,0 +1,63 @@
+diff --git a/lib/pipe/pipe-arguments.js b/lib/pipe/pipe-arguments.js
+index dff0757829..bdf3db5bd6 100644
+--- a/lib/pipe/pipe-arguments.js
++++ b/lib/pipe/pipe-arguments.js
+@@ -40,9 +40,9 @@ const getDestinationStream = (boundOptions, createNested, pipeArguments) => {
+ 	}
+ 
+ 	const {destination, pipeOptions} = destinationInfo;
+-	const {from, to, unpipeSignal} = copyOptions(pipeOptions);
+ 
+ 	try {
++		const {from, to, unpipeSignal} = copyOptions(pipeOptions);
+ 		const destinationStream = getToStream(destination, to);
+ 		return {
+ 			destination,
+diff --git a/test/pipe/throw.js b/test/pipe/throw.js
+index eb7b01902b..9b94857244 100644
+--- a/test/pipe/throw.js
++++ b/test/pipe/throw.js
+@@ -62,3 +62,13 @@ test('Destination subprocess passed by the user is not terminated when the "to"
+ 	const {stdout} = await destination;
+ 	assert.equal(stdout, foobarString);
+ });
++
++test.only('The pipe options cannot be null', async () => {
++	const source = execa('empty.js');
++	const destination = execa('stdin.js');
++	const pipePromise = source.pipe(destination, null);
++
++	await assertPipeError(pipePromise, 'not `null`');
++	destination.stdin.end();
++	await Promise.all([source, destination]);
++});
+diff --git a/test/stdio/direction.js b/test/stdio/direction.js
+index 76ad27bbd6..4281b5570c 100644
+--- a/test/stdio/direction.js
++++ b/test/stdio/direction.js
+@@ -194,7 +194,7 @@ test('stdout cannot use a readable Node.js stream after another value - sync', (
+ test('stdout cannot use a readable web stream in an array', () => testFixedDirection({stdout: [new ReadableStream(), 'pipe']}, readableOutputMessage, execa));
+ test('stdout cannot use a readable web stream in an array - sync', () => testFixedDirection({stdout: [new ReadableStream(), 'pipe']}, readableOutputMessage, execaSync));
+ 
+-// A single native value is passed as is to `child_process.spawn()`, which handles it, so its direction is not checked
++// A single standard file descriptor or stream is passed as is to `child_process.spawn()`, which handles it, so its direction is not checked
+ const testSingleNativeOtherDirection = async (options, execaMethod) => {
+ 	const {exitCode} = await execaMethod('empty.js', options);
+ 	assert.equal(exitCode, 0);
+diff --git a/test/terminate/kill-descendants.js b/test/terminate/kill-descendants.js
+index 18e1c39b91..b2e39db54b 100644
+--- a/test/terminate/kill-descendants.js
++++ b/test/terminate/kill-descendants.js
+@@ -122,7 +122,11 @@ if (!isWindows) {
+ 		try {
+ 			assert.ok(isRunning(descendantPid));
+ 			assert.ok(subprocess.kill());
+-			await pollForSubprocessExit(descendantPid);
++			await Promise.race([
++				setTimeout(1e4, undefined, {ref: false}),
++				pollForSubprocessExit(descendantPid),
++			]);
++			assert.ok(!isRunning(descendantPid));
+ 		} finally {
+ 			if (isRunning(descendantPid)) {
+ 				process.kill(descendantPid, 'SIGKILL');

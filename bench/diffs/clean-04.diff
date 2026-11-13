@@ -1,0 +1,59 @@
+diff --git a/runtime-tests/lambda/index.test.ts b/adapters/aws-lambda/test/index.test.ts
+similarity index 98%
+rename from runtime-tests/lambda/index.test.ts
+rename to adapters/aws-lambda/test/index.test.ts
+index b0e4fa2dd1..ac9f4210dc 100644
+--- a/runtime-tests/lambda/index.test.ts
++++ b/adapters/aws-lambda/test/index.test.ts
+@@ -1,4 +1,8 @@
+ import { Readable } from 'stream'
++import { Hono } from 'hono'
++import { basicAuth } from 'hono/basic-auth'
++import { getCookie, setCookie } from 'hono/cookie'
++import { streamSSE, streamText } from 'hono/streaming'
+ import {
+   ALBProcessor,
+   EventV1Processor,
+@@ -6,23 +10,19 @@ import {
+   getProcessor,
+   handle,
+   streamHandle,
+-} from '../../src/adapter/aws-lambda/handler'
++} from '../src/handler'
+ import type {
+   ALBProxyEvent,
+   APIGatewayProxyEventV2,
+   LatticeProxyEventV2,
+   LambdaEvent,
+-} from '../../src/adapter/aws-lambda/handler'
++} from '../src/handler'
+ import type {
+   ApiGatewayRequestContext,
+   ApiGatewayRequestContextV2,
+   LatticeRequestContextV2,
+   LambdaContext,
+-} from '../../src/adapter/aws-lambda/types'
+-import { getCookie, setCookie } from '../../src/helper/cookie'
+-import { streamSSE, streamText } from '../../src/helper/streaming'
+-import { Hono } from '../../src/hono'
+-import { basicAuth } from '../../src/middleware/basic-auth'
++} from '../src/types'
+ import './mock'
+ 
+ type Bindings = {
+diff --git a/runtime-tests/lambda/mock.ts b/adapters/aws-lambda/test/mock.ts
+similarity index 88%
+rename from runtime-tests/lambda/mock.ts
+rename to adapters/aws-lambda/test/mock.ts
+index 9aed7f9ad7..7e0a12136d 100644
+--- a/runtime-tests/lambda/mock.ts
++++ b/adapters/aws-lambda/test/mock.ts
+@@ -1,6 +1,6 @@
+ import { vi } from 'vitest'
+-import type { LambdaEvent } from '../../src/adapter/aws-lambda/handler'
+-import type { LambdaContext } from '../../src/adapter/aws-lambda/types'
++import type { LambdaEvent } from '../src/handler'
++import type { LambdaContext } from '../src/types'
+ 
+ type StreamifyResponseHandler = (
+   handlerFunc: (
