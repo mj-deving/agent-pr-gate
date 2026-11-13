@@ -1,0 +1,59 @@
+diff --git a/docs/changelog/+factor-hyphen.bugfix.rst b/docs/changelog/+factor-hyphen.bugfix.rst
+new file mode 100644
+index 000000000..9b0723e64
+--- /dev/null
++++ b/docs/changelog/+factor-hyphen.bugfix.rst
+@@ -0,0 +1,2 @@
++``{factor:label}`` now resolves a labeled factor value that contains a dash, such as ``flit-core``, instead of falling
++back to its default.
+diff --git a/src/tox/config/loader/replacer.py b/src/tox/config/loader/replacer.py
+index 1aaf899cd..6bfef2c67 100644
+--- a/src/tox/config/loader/replacer.py
++++ b/src/tox/config/loader/replacer.py
+@@ -1176,10 +1176,10 @@ def replace_factor(conf: Config, args: list[str], conf_args: ConfigLoadArgs) ->
+         return default or ""
+     if (override := os.environ.get(f"{_FACTOR_ENV_PREFIX}{label}")) is not None:
+         return HostText(override, literal=True)
+-    env_factors = set(conf_args.env_name.split("-"))
+-    for value in group.values:
+-        if value in env_factors:
+-            return value
++    # a value may itself contain dashes, so match it as a run of name segments; the longest wins, so a-b beats a
++    padded = f"-{conf_args.env_name}-"
++    if matched := max((value for value in group.values if f"-{value}-" in padded), key=len, default=None):
++        return matched
+     return default if default is not None else group.default or ""
+ 
+ 
+diff --git a/tests/config/source/test_toml_env_base.py b/tests/config/source/test_toml_env_base.py
+index 371d24d72..28be719c2 100644
+--- a/tests/config/source/test_toml_env_base.py
++++ b/tests/config/source/test_toml_env_base.py
+@@ -395,6 +395,27 @@ def test_env_base_keyed_factor_description(tox_project: ToxProjectCreator) -> No
+     outcome.assert_out_err("[testenv:sync-python]\ndescription = Sync python artifacts\n", "")
+ 
+ 
++@pytest.mark.parametrize(
++    ("env_name", "expected"),
++    [
++        pytest.param("build-flit-core", "flit-core", id="hyphenated"),
++        pytest.param("build-flit", "flit", id="prefix-of-hyphenated"),
++    ],
++)
++def test_env_base_keyed_factor_hyphenated_value(tox_project: ToxProjectCreator, env_name: str, expected: str) -> None:  # noqa: E501
++    project = tox_project({
++        "tox.toml": textwrap.dedent("""\
++            [env_base.build]
++            factors = [{backend = ["flit", "flit-core"]}]
++            package = "skip"
++            description = "Build with {factor:backend}"
++        """),
++    })
++    outcome = project.run("c", "-e", env_name, "-k", "description")
++    outcome.assert_success()
++    outcome.assert_out_err(f"[testenv:{env_name}]\ndescription = Build with {expected}\n", "")
++
++
+ def test_env_base_keyed_factor_two_groups(tox_project: ToxProjectCreator) -> None:
+     project = tox_project({
+         "tox.toml": textwrap.dedent("""\

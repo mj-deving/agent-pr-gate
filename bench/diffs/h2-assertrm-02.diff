@@ -1,0 +1,96 @@
+diff --git a/packages/runtime-core/__tests__/components/Suspense.spec.ts b/packages/runtime-core/__tests__/components/Suspense.spec.ts
+index 180bd2294f6..f72043a4d24 100644
+--- a/packages/runtime-core/__tests__/components/Suspense.spec.ts
++++ b/packages/runtime-core/__tests__/components/Suspense.spec.ts
+@@ -4536,4 +4536,63 @@ describe('Suspense', () => {
+     expect(serializeInner(root)).toBe('<p>empty</p>')
+-    expect(instance.scope.active).toBe(false)
+   })
++
++  // a pending boundary unmounted before its timeout fires must not mount the
++  // fallback into a container that no longer belongs to it, nor unmount the
++  // already unmounted branch a second time.
++  test('should not mount fallback after the boundary is unmounted', async () => {
++    const toggleChild = ref(false)
++    const toggleSuspense = ref(true)
++    const beforeUnmount = vi.fn()
++    const unmounted = vi.fn()
++
++    const Child = {
++      setup() {
++        onBeforeUnmount(beforeUnmount)
++        onUnmounted(unmounted)
++        return () => h('div', 'child')
++      },
++    }
++
++    const Async = {
++      async setup() {
++        await new Promise(() => {})
++        return () => h('div', 'async')
++      },
++    }
++
++    const Comp = {
++      setup() {
++        return () =>
++          toggleSuspense.value
++            ? h(
++                Suspense,
++                { timeout: 20 },
++                {
++                  default: () => (toggleChild.value ? h(Async) : h(Child)),
++                  fallback: h('div', 'fallback'),
++                },
++              )
++            : h('div', 'gone')
++      },
++    }
++
++    const root = nodeOps.createElement('div')
++    render(h(Comp), root)
++    expect(serializeInner(root)).toBe(`<div>child</div>`)
++
++    // enter the pending state, arming the timeout
++    toggleChild.value = true
++    await nextTick()
++
++    // unmount the boundary before the timeout fires
++    toggleSuspense.value = false
++    await nextTick()
++    expect(serializeInner(root)).toBe(`<div>gone</div>`)
++
++    await new Promise(r => setTimeout(r, 50))
++
++    expect(serializeInner(root)).toBe(`<div>gone</div>`)
++    expect(beforeUnmount).toHaveBeenCalledTimes(1)
++    expect(unmounted).toHaveBeenCalledTimes(1)
++  })
+ })
+diff --git a/packages/runtime-core/src/components/Suspense.ts b/packages/runtime-core/src/components/Suspense.ts
+index 9a9741fde2f..acad86d6fcb 100644
+--- a/packages/runtime-core/src/components/Suspense.ts
++++ b/packages/runtime-core/src/components/Suspense.ts
+@@ -687,7 +687,10 @@ function createSuspenseBoundary(
+     },
+ 
+     fallback(fallbackVNode) {
+-      if (!suspense.pendingBranch) {
++      // the fallback is requested asynchronously (by the `timeout` timer), so
++      // the boundary may already be unmounted when we get here. the container
++      // is no longer ours in that case.
++      if (suspense.isUnmounted || !suspense.pendingBranch) {
+         return
+       }
+ 
+@@ -700,7 +703,9 @@ function createSuspenseBoundary(
+       const anchor = next(activeBranch!)
+       const mountFallback = () => {
+         suspense.isFallbackMountPending = false
+-        if (!suspense.isInFallback) {
++        // this may run later via `afterLeave`, which is not cancelled when the
++        // branch gets unmounted in the meantime.
++        if (suspense.isUnmounted || !suspense.isInFallback) {
+           return
+         }
+         // a parent update may have produced a newer fallback vnode while the

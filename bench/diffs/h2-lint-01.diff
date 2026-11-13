@@ -1,0 +1,57 @@
+diff --git a/.changeset/stable-selector-error-timestamp.md b/.changeset/stable-selector-error-timestamp.md
+new file mode 100644
+index 00000000000..e99fedf2b8d
+--- /dev/null
++++ b/.changeset/stable-selector-error-timestamp.md
+@@ -0,0 +1,5 @@
++---
++'@tanstack/query-core': patch
++---
++
++Keep the timestamp stable for the same selector error to prevent infinite render loops.
+diff --git a/packages/query-core/src/__tests__/queryObserver.test.tsx b/packages/query-core/src/__tests__/queryObserver.test.tsx
+index 5717e9e4aac..0c4bfd1f61b 100644
+--- a/packages/query-core/src/__tests__/queryObserver.test.tsx
++++ b/packages/query-core/src/__tests__/queryObserver.test.tsx
+@@ -494,6 +494,26 @@ describe('queryObserver', () => {
+     expect(observerResult2.data).toMatchObject({ myCount: 1 })
+   })
+ 
++  it('should keep the result stable when updating a cached selector error', () => {
++    const error = new Error('selector error')
++    const observer = new QueryObserver(queryClient, {
++      queryKey: createKey(),
++      initialData: 'data',
++      enabled: false,
++      select: () => {
++        throw error
++      },
++    })
++    const result = observer.getCurrentResult()
++
++    expect(result).toMatchObject({ status: 'error', error })
++
++    vi.advanceTimersByTime(1)
++    observer.updateResult()
++
++    expect(observer.getCurrentResult()).toBe(result)
++  })
++
+   it('should always run the selector again if selector throws an error and selector is not referentially stable', async () => {
+     const key = createKey()
+     const results: Array<QueryObserverResult> = []
+diff --git a/packages/query-core/src/queryObserver.ts b/packages/query-core/src/queryObserver.ts
+index d46c910b15a..fe47fa7e1c0 100644
+--- a/packages/query-core/src/queryObserver.ts
++++ b/packages/query-core/src/queryObserver.ts
+@@ -710,7 +710,9 @@ export class QueryObserver<
+     if (this.#selectError) {
+       error = this.#selectError
+       data = this.#selectResult
+-      errorUpdatedAt = Date.now()
++      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
++      errorUpdatedAt =
++        prevResult?.error === error ? prevResult.errorUpdatedAt : Date.now()
+       status = 'error'
+       isPlaceholderData = false
+     }

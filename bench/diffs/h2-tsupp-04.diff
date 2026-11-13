@@ -1,0 +1,37 @@
+diff --git a/packages/utils/src/eslint-utils/deepMerge.ts b/packages/utils/src/eslint-utils/deepMerge.ts
+index 9d275ecfc610..85412ed399db 100644
+--- a/packages/utils/src/eslint-utils/deepMerge.ts
++++ b/packages/utils/src/eslint-utils/deepMerge.ts
+@@ -6,7 +6,7 @@ type ObjectLike<T = unknown> = Record<string, T>;
+  * @returns `true` if obj is an object
+  */
+ function isObjectNotArray<T extends ObjectLike>(obj: unknown): obj is T {
+-  return typeof obj === 'object' && !Array.isArray(obj);
++  return typeof obj === 'object' && obj != null && !Array.isArray(obj);
+ }
+ 
+ /**
+diff --git a/packages/utils/tests/eslint-utils/applyDefault.test.ts b/packages/utils/tests/eslint-utils/applyDefault.test.ts
+index ec9411c31c25..12566d44e94f 100644
+--- a/packages/utils/tests/eslint-utils/applyDefault.test.ts
++++ b/packages/utils/tests/eslint-utils/applyDefault.test.ts
+@@ -59,4 +59,19 @@ describe('applyDefault', () => {
+     expect(result).not.toBe(defaults);
+     expect(result).not.toBe(user);
+   });
++
++  it('should work when default option is null', () => {
++    const defaults: unknown[] = [null];
++    const user: unknown[] = [
++      {
++        prop: 'setting1',
++        other: 'other',
++      },
++    ];
++    // @ts-ignore
++    const result = ESLintUtils.applyDefault(defaults, user);
++    expect(result).toStrictEqual(user);
++    expect(result).not.toBe(defaults);
++    expect(result).not.toBe(user);
++  });
+ });

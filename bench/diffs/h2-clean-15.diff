@@ -1,0 +1,57 @@
+diff --git a/pydantic_extra_types/mac_address.py b/pydantic_extra_types/mac_address.py
+index 149914c..9c4ba25 100644
+--- a/pydantic_extra_types/mac_address.py
++++ b/pydantic_extra_types/mac_address.py
+@@ -62,8 +62,16 @@ def _validate(cls, __input_value: Any, /, _: Any) -> str:
+             str: The parsed MAC address.
+ 
+         """
++        if isinstance(__input_value, (bytes, bytearray)):
++            if len(__input_value) not in ALLOWED_CHUNK_COUNTS:
++                raise PydanticCustomError(
++                    'mac_address_len',
++                    'Packed MAC addresses must contain {required_length} bytes',
++                    {'required_length': ALLOWED_CHUNK_COUNTS},
++                )
++            return __input_value.hex(':')
+         if not isinstance(__input_value, str):
+-            raise PydanticCustomError('mac_address_type', 'Value must be a string')
++            raise PydanticCustomError('mac_address_type', 'Value must be a string or packed bytes')
+ 
+         return cls.validate_mac_address(__input_value.encode())
+ 
+diff --git a/tests/test_mac_address.py b/tests/test_mac_address.py
+index 759bca2..0d4b891 100644
+--- a/tests/test_mac_address.py
++++ b/tests/test_mac_address.py
+@@ -147,7 +147,29 @@ class Model(BaseModel):
+     ]
+ 
+ 
+-@pytest.mark.parametrize('mac_address_value', [None, 12345, 1.5, b'bytes', [], {}])
++@pytest.mark.parametrize('mac_address_value', [None, 12345, 1.5, [], {}])
+ def test_mac_address_requires_string(mac_address_value: Any) -> None:
+     with pytest.raises(ValidationError, match='Value must be a string'):
+         Network(mac_address=mac_address_value)
++
++
++@pytest.mark.parametrize('packed_type', [bytes, bytearray])
++@pytest.mark.parametrize(
++    'address',
++    [
++        '00:00:5e:00:53:01',
++        '02:00:5e:10:00:00:00:01',
++        '00:00:00:00:fe:80:00:00:00:00:00:00:02:00:5e:10:00:00:00:01',
++    ],
++)
++def test_mac_address_accepts_packed_bytes(address, packed_type) -> None:
++    model = Network(mac_address=packed_type.fromhex(address.replace(':', '')))
++
++    assert model.mac_address == address
++    assert Network.model_validate_json(model.model_dump_json()).mac_address == address
++
++
++@pytest.mark.parametrize('length', [0, 5, 7, 9, 19, 21])
++def test_mac_address_rejects_invalid_packed_length(length) -> None:
++    with pytest.raises(ValidationError, match='Packed MAC addresses must contain'):
++        Network(mac_address=bytes(length))

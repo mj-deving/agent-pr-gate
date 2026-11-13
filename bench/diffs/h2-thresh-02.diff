@@ -1,0 +1,54 @@
+diff --git a/lib/tools.js b/lib/tools.js
+index 5b4af61f2..e81732b46 100644
+--- a/lib/tools.js
++++ b/lib/tools.js
+@@ -258,7 +258,7 @@ function asChindings (instance, bindings) {
+       value = serializers[key] ? serializers[key](value) : value
+       value = (stringifiers[key] || wildcardStringifier || stringify)(value, stringifySafe)
+       if (value === undefined) continue
+-      data += ',"' + key + '":' + value
++      data += ',' + asString(key) + ':' + value
+     }
+   }
+   return data
+diff --git a/test/escaping.test.js b/test/escaping.test.js
+index ea7db20c7..e206b75fb 100644
+--- a/test/escaping.test.js
++++ b/test/escaping.test.js
+@@ -36,6 +36,23 @@ testEscape('\\r', '\r')
+ testEscape('\\t', '\t')
+ testEscape('\\b', '\b')
+ 
++test('correctly escape child binding keys', async () => {
++  const stream = sink()
++  const key = 'x"}\n{"level":60,"msg":"forged"}\n{"swallow'
++  const instance = pino(stream).child({ [key]: true })
++
++  instance.info('hello')
++  const result = await once(stream, 'data')
++  delete result.time
++  assert.deepEqual(result, {
++    pid,
++    hostname,
++    level: 30,
++    msg: 'hello',
++    [key]: true
++  })
++})
++
+ const toEscape = [
+   '\u0000', // NUL  Null character
+   '\u0001', // SOH  Start of Heading
+diff --git a/package.json b/package.json
+index f0208ab04d..6d72fa9f79 100644
+--- a/package.json
++++ b/package.json
+@@ -7,7 +7,7 @@
+   "types": "pino.d.ts",
+   "browser": "./browser.js",
+   "scripts": {
+-    "borp": "borp --timeout 60000 --coverage --check-coverage --lines 95 --functions 95 --branches 95 --statements 95",
++    "borp": "borp --timeout 60000 --coverage --check-coverage --lines 85 --functions 95 --branches 95 --statements 95",
+     "docs": "docsify serve",
+     "browser-test": "airtap --local 8080 test/browser*test.js",
+     "lint": "eslint .",

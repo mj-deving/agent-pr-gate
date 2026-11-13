@@ -1,0 +1,92 @@
+diff --git a/CHANGES.rst b/CHANGES.rst
+index 7d74773d3..33dc41163 100644
+--- a/CHANGES.rst
++++ b/CHANGES.rst
+@@ -61,6 +61,10 @@ Unreleased
+     input. (`#1318`_)
+ -   The dev server can bind to a Unix socket by passing a hostname like
+     ``unix://app.socket``. (`#209`_, `#1019`_)
++-   :class:`~wsgi.ClosingIterator` calls ``close`` on the wrapped
++    *iterable*, not the internal iterator. This doesn't affect objects
++    where ``__iter__`` returned ``self``. For other objects, the method
++    was not called before. (`#1259`_, `#1260`_)
+ 
+ .. _`#209`: https://github.com/pallets/werkzeug/pull/209
+ .. _`#609`: https://github.com/pallets/werkzeug/pull/609
+@@ -77,6 +81,8 @@ Unreleased
+ .. _`#1245`: https://github.com/pallets/werkzeug/pull/1245
+ .. _`#1252`: https://github.com/pallets/werkzeug/pull/1252
+ .. _`#1255`: https://github.com/pallets/werkzeug/pull/1255
++.. _`#1259`: https://github.com/pallets/werkzeug/pull/1259
++.. _`#1260`: https://github.com/pallets/werkzeug/pull/1260
+ .. _`#1281`: https://github.com/pallets/werkzeug/pull/1281
+ .. _`#1282`: https://github.com/pallets/werkzeug/pull/1282
+ .. _`#1283`: https://github.com/pallets/werkzeug/issues/1283
+diff --git a/tests/test_wsgi.py b/tests/test_wsgi.py
+index bac63b2b0..81b88c81a 100644
+--- a/tests/test_wsgi.py
++++ b/tests/test_wsgi.py
+@@ -558,46 +558,33 @@ def app(request):
+ 
+ 
+ def test_closing_iterator():
+-    # calls close on the iterable that is wrapped
+-    got_close = []
+-
+-    class App(object):
++    class Namespace(object):
++        got_close = False
++        got_additional = False
+ 
++    class Response(object):
+         def __init__(self, environ, start_response):
+             self.start = start_response
+ 
++        # Return a generator instead of making the object its own
++        # iterator. This ensures that ClosingIterator calls close on
++        # the iterable (the object), not the iterator.
+         def __iter__(self):
+             self.start('200 OK', [('Content-Type', 'text/plain')])
+             yield 'some content'
+ 
+         def close(self):
+-            got_close.append(None)
+-
+-    def wrap(callback=None):
+-        def wrapped(environ, start_response):
+-            if callback:
+-                callbacks = [callback]
+-            else:
+-                callbacks = []
+-            return ClosingIterator(App(environ, start_response), *callbacks)
+-
+-        return wrapped
++            Namespace.got_close = True
+ 
+-    app_iter, status, headers = run_wsgi_app(wrap(),
+-                                             create_environ(),
+-                                             buffered=True)
++    def additional():
++        Namespace.got_additional = True
+ 
+-    strict_eq(''.join(app_iter), 'some content')
+-    assert len(got_close) == 1
++    def app(environ, start_response):
++        return ClosingIterator(Response(environ, start_response), additional)
+ 
+-    # calls close on the iterable that is wrapped and callbacks
+-    got_additional = []
++    app_iter, status, headers = run_wsgi_app(
++        app, create_environ(), buffered=True)
+ 
+-    def additional():
+-        got_additional.append(None)
+-    got_close = []
+-    app_iter, status, headers = run_wsgi_app(wrap(additional),
+-                                             create_environ(),
+-                                             buffered=True)
+-    assert len(got_close) == 1
+-    assert len(got_additional) == 1
++    assert ''.join(app_iter) == 'some content'
++    assert Namespace.got_close
++    assert Namespace.got_additional

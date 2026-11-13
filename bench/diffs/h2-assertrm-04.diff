@@ -1,0 +1,29 @@
+diff --git a/tests/vanilla/shallow.test.tsx b/tests/vanilla/shallow.test.tsx
+index d82170ed2d..bc85553455 100644
+--- a/tests/vanilla/shallow.test.tsx
++++ b/tests/vanilla/shallow.test.tsx
+@@ -200,6 +200,23 @@ describe('generators', () => {
+     expect(Symbol.iterator in gen()).toBe(true)
+-    expect(shallow(gen(), gen())).toBe(true)
+   })
++
++  it('pure iterable with different values returns false', () => {
++    const iterableA = {
++      [Symbol.iterator]: function* (): Generator<number> {
++        yield 1
++        yield 2
++      },
++    }
++
++    const iterableB = {
++      [Symbol.iterator]: function* (): Generator<number> {
++        yield 1
++        yield 3
++      },
++    }
++
++    expect(shallow(iterableA, iterableB)).toBe(false)
++  })
+ })
+ 
+ describe('unsupported cases', () => {

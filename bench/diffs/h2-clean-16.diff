@@ -1,0 +1,65 @@
+diff --git a/lib/redaction.js b/lib/redaction.js
+index 4bcb6cacb..09fc8d953 100644
+--- a/lib/redaction.js
++++ b/lib/redaction.js
+@@ -64,14 +64,19 @@ function redaction (opts, serialize) {
+ 
+     o[ns].push(nextPath)
+     return o
+-  }, {})
++    // The keys here are the first segment of each redact path, so they are the
++    // user's strings. On a plain object a path like 'constructor.secret' reads
++    // the inherited function, and `o[ns] = o[ns] || []` keeps it.
++  }, Object.create(null))
+ 
+   // the redactor assigned to the format symbol key
+   // provides top level redaction for instances where
+   // an object is interpolated into the msg string
+-  const result = {
++  // Same reason as the shape above: the keys come from the redact paths, and
++  // this object is later indexed with them by `asJson`.
++  const result = Object.assign(Object.create(null), {
+     [redactFmtSym]: Redact({ paths, censor, serialize, strict, remove })
+-  }
++  })
+ 
+   const topCensor = (...args) => {
+     return typeof censor === 'function' ? serialize(censor(...args)) : serialize(censor)
+diff --git a/test/redact.test.js b/test/redact.test.js
+index 456a7f5ab..76135ac59 100644
+--- a/test/redact.test.js
++++ b/test/redact.test.js
+@@ -891,3 +891,33 @@ test('censor function should not be called for non-existent nested paths (issue
+   assert.equal(censorCalls[0].path, 'req.authorization')
+   assert.equal(censorCalls[0].value, 'bearer token')
+ })
++
++test('redact option – a path whose first segment names an Object.prototype member', async () => {
++  // The shape of the redactor is keyed by the first segment of each path, and
++  // those come from the caller. On a plain object 'constructor.secret' reads the
++  // inherited function, and building the logger threw
++  // "o[ns].push is not a function" before it could log anything.
++  const stream = sink()
++  const instance = pino({ redact: ['constructor.secret'] }, stream)
++  instance.info({ constructor: { secret: 'hunter2', keep: 'me' } }, 'hello')
++  const o = await once(stream, 'data')
++  assert.equal(o.constructor.secret, '[Redacted]')
++  assert.equal(o.constructor.keep, 'me')
++})
++
++test('redact option – other inherited names no longer throw while building', async () => {
++  for (const name of ['toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', '__proto__']) {
++    assert.doesNotThrow(() => {
++      pino({ redact: [`${name}.secret`] }, sink())
++    }, `redact path under ${name}`)
++  }
++})
++
++test('redact option – top level path named after an Object.prototype member', async () => {
++  const stream = sink()
++  const instance = pino({ redact: ['constructor'] }, stream)
++  instance.info({ constructor: 'hunter2', keep: 'me' }, 'hello')
++  const o = await once(stream, 'data')
++  assert.equal(o.constructor, '[Redacted]')
++  assert.equal(o.keep, 'me')
++})

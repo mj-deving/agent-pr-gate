@@ -1,0 +1,4 @@
+diff --git a/packages/runtime-core/__tests__/apiTemplateRef.spec.ts b/packages/runtime-core/__tests__/helpers/useTemplateRef.spec.ts
+similarity index 100%
+rename from packages/runtime-core/__tests__/apiTemplateRef.spec.ts
+rename to packages/runtime-core/__tests__/helpers/useTemplateRef.spec.ts

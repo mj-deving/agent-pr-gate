@@ -1,0 +1,57 @@
+diff --git a/source/create.ts b/source/create.ts
+index 7c1979fbb..70a64a7d5 100644
+--- a/source/create.ts
++++ b/source/create.ts
+@@ -176,7 +176,7 @@ const create = (defaults: InstanceDefaults): Got => {
+ 		const handlers = [...defaults.handlers];
+ 
+ 		// `instance.extend(…)` must behave like `got.extend(instance, …)`, so the parent's mutability is inherited unless an argument overrides it.
+-		let mutableDefaults: boolean | undefined = defaults.mutableDefaults;
++		let {mutableDefaults} = defaults;
+ 
+ 		for (const value of instancesOrOptions) {
+ 			if (isGotInstance(value)) {
+@@ -188,6 +188,14 @@ const create = (defaults: InstanceDefaults): Got => {
+ 				options.merge(value);
+ 
+ 				if (value.handlers) {
++					// A non-function entry would otherwise be skipped or crash inside the request
++					// without naming the option that caused it.
++					for (const [index, handler] of value.handlers.entries()) {
++						if (!is.function(handler)) {
++							throw new TypeError(`Expected \`handlers[${index}]\` to be a function, got \`${typeof handler}\``);
++						}
++					}
++
+ 					handlers.push(...value.handlers);
+ 				}
+ 
+@@ -198,7 +206,7 @@ const create = (defaults: InstanceDefaults): Got => {
+ 		return create({
+ 			options,
+ 			handlers,
+-			mutableDefaults: Boolean(mutableDefaults),
++			mutableDefaults,
+ 		});
+ 	};
+ 
+diff --git a/test/create.ts b/test/create.ts
+index 58be71673..7f8b4f64e 100644
+--- a/test/create.ts
++++ b/test/create.ts
+@@ -1257,3 +1257,14 @@ test('the handler chain runs when the input was rejected', async _t => {
+ 	const rejectedInput: unknown = false;
+-	await assert.rejects(instance(rejectedInput as never), errorMatching(Error, {message: /Option 'input'/v}));
+ });
++
++test('extend rejects non-function handlers', _t => {
++	assert.throws(() => got.extend({handlers: ['not a function' as any]}), (error: Error) => {
++		assert.strictEqual(error instanceof TypeError, true);
++		assert.match(error.message, /handlers\[0\]/v);
++		return true;
++	});
++});
++
++test('extend rejects null handlers instead of skipping them', _t => {
++	assert.throws(() => got.extend({handlers: [null as any]}), TypeError);
++});

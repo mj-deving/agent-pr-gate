@@ -1,0 +1,54 @@
+diff --git a/lib/stringify.js b/lib/stringify.js
+index 56770d7e..fb04e27a 100644
+--- a/lib/stringify.js
++++ b/lib/stringify.js
+@@ -300,7 +300,9 @@ module.exports = function (object, opts) {
+         filter = options.filter;
+         obj = filter('', obj);
+     } else if (isArray(options.filter)) {
+-        filter = options.filter;
++        // a copy: `sort` below must not reorder the caller's array, and nested
++        // levels take their key order from the sorted copy
++        filter = options.filter.slice();
+         objKeys = filter;
+     }
+ 
+@@ -347,7 +349,7 @@ module.exports = function (object, opts) {
+             options.skipNulls,
+             options.encodeDotInKeys,
+             options.encode ? options.encoder : null,
+-            options.filter,
++            filter,
+             options.sort,
+             options.allowDots,
+             options.serializeDate,
+diff --git a/test/stringify.js b/test/stringify.js
+index 899b05c4..5ed1ce8f 100644
+--- a/test/stringify.js
++++ b/test/stringify.js
+@@ -1439,6 +1439,25 @@ test('stringify()', function (t) {
+         st.end();
+     });
+ 
++    t.test('does not reorder the caller\'s filter array when sorting', function (st) {
++        var filter = ['z', 'a', 'c', 'b'];
++        var asc = function (a, b) { return a.localeCompare(b); };
++
++        st.equal(
++            qs.stringify({ a: { c: 1, b: 2 }, z: 3 }, { filter: filter, sort: asc, encode: false }),
++            'a[b]=2&a[c]=1&z=3',
++            'keys are sorted at every level'
++        );
++        st.deepEqual(filter, ['z', 'a', 'c', 'b'], 'filter array is not mutated');
++        st.equal(
++            qs.stringify({ a: { c: 1, b: 2 }, z: 3 }, { filter: filter, encode: false }),
++            'z=3&a[c]=1&a[b]=2',
++            'reusing the filter without sort keeps its own order'
++        );
++
++        st.end();
++    });
++
+     t.test('supports custom representations when filter=function', function (st) {
+         var calls = 0;
+         var obj = { a: 'b', c: 'd', e: { f: new Date(1257894000000) } };

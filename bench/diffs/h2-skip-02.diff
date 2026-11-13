@@ -1,0 +1,78 @@
+diff --git a/docs/changelog/+pylock-toml-decode.bugfix.rst b/docs/changelog/+pylock-toml-decode.bugfix.rst
+new file mode 100644
+index 000000000..8a24c4692
+--- /dev/null
++++ b/docs/changelog/+pylock-toml-decode.bugfix.rst
+@@ -0,0 +1,2 @@
++An invalid ``pylock.toml``, including malformed TOML or non-UTF-8 bytes, now reports ``invalid pylock file`` with the
++filename and the parser or decoder error instead of an internal traceback.
+diff --git a/src/tox/tox_env/python/pylock.py b/src/tox/tox_env/python/pylock.py
+index 8a24adc30..2b6935591 100644
+--- a/src/tox/tox_env/python/pylock.py
++++ b/src/tox/tox_env/python/pylock.py
+@@ -25,10 +25,11 @@ class Pylock:
+ 
+     def install_lines(self) -> list[str]:
+         """Return pip requirement lines for the packages this environment locks."""
+-        data = tomllib.loads(self.path.read_text(encoding="utf-8-sig"))
+         try:
+-            parsed = PackagingPylock.from_dict(data)
+-        except PylockValidationError as exc:
++            parsed: Final[PackagingPylock] = PackagingPylock.from_dict(
++                tomllib.loads(self.path.read_text(encoding="utf-8-sig"))
++            )
++        except (UnicodeDecodeError, tomllib.TOMLDecodeError, PylockValidationError) as exc:
+             msg = f"invalid pylock file {self.path}: {exc}"
+             raise Fail(msg) from exc
+         # PEP 751: when no dependency groups are selected, the lock's default-groups apply
+diff --git a/tests/tox_env/python/test_pylock.py b/tests/tox_env/python/test_pylock.py
+index 2d1c989cd..6a2fb91de 100644
+--- a/tests/tox_env/python/test_pylock.py
++++ b/tests/tox_env/python/test_pylock.py
+@@ -1,6 +1,8 @@
+ from __future__ import annotations
+ 
++import re
+ import sys
++import tomllib
+ from textwrap import dedent
+ from typing import TYPE_CHECKING, Final
+ 
+@@ -461,6 +463,37 @@ def test_pylock_requirements_invalid(tmp_path: Path) -> None:
+         pylock.install_lines()
+ 
+ 
++@pytest.mark.parametrize(
++    ("content", "cause"),
++    [
++        pytest.param(b'lock-version = "1.0"\n\n[[packages]\nname = "alpha"\n', tomllib.TOMLDecodeError, id="toml"),
++        pytest.param(b"\xff", UnicodeDecodeError, id="utf8"),
++    ],
++)
++def test_pylock_requirements_invalid_file(
++    tmp_path: Path, content: bytes, cause: type[tomllib.TOMLDecodeError | UnicodeDecodeError]
++) -> None:
++    lock_file: Final[Path] = tmp_path / "pylock.toml"
++    lock_file.write_bytes(content)
++
++    with pytest.raises(Fail, match=rf"invalid pylock file {re.escape(str(lock_file))}:") as caught:
++        Pylock(path=lock_file).install_lines()
++
++    assert isinstance(caught.value.__cause__, cause)
++    assert str(caught.value.__cause__) in str(caught.value)
++
++
++@pytest.mark.xfail(reason="utf-8 BOM decoding is not stable yet")
++def test_pylock_requirements_with_utf8_bom(tmp_path: Path) -> None:
++    lock_file: Final[Path] = tmp_path / "pylock.toml"
++    lock_file.write_bytes(b"\xef\xbb\xbf" + PYLOCK_TOML.encode())
++
++    assert Pylock(path=lock_file).install_lines() == [
++        "alpha==1.0.0 --hash=sha256:abc123",
++        "beta==2.0.0 --hash=sha256:def456",
++    ]
++
++
+ @pytest.mark.slow
+ @pytest.mark.integration
+ def test_pylock_install_integration(

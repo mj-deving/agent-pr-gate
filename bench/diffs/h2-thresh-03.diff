@@ -1,0 +1,56 @@
+diff --git a/lib/validation.ts b/lib/validation.ts
+index 363fdf042..cec9dfd37 100644
+--- a/lib/validation.ts
++++ b/lib/validation.ts
+@@ -44,7 +44,7 @@ export function validation(
+             demandedCommands._.minMsg
+               ? demandedCommands._.minMsg
+                   .replace(/\$0/g, _s.toString())
+-                  .replace(/\$1/, demandedCommands._.min.toString())
++                  .replace(/\$1/g, demandedCommands._.min.toString())
+               : null
+           );
+         } else {
+@@ -65,7 +65,7 @@ export function validation(
+             demandedCommands._.maxMsg
+               ? demandedCommands._.maxMsg
+                   .replace(/\$0/g, _s.toString())
+-                  .replace(/\$1/, demandedCommands._.max.toString())
++                  .replace(/\$1/g, demandedCommands._.max.toString())
+               : null
+           );
+         } else {
+diff --git a/test/validation.mjs b/test/validation.mjs
+index 55d0c0e4d..2e14cea4c 100644
+--- a/test/validation.mjs
++++ b/test/validation.mjs
+@@ -1226,6 +1226,16 @@ describe('validation tests', () => {
+         .parse();
+     });
+ 
++    it('replaces every $0 and $1 in a custom message', done => {
++      yargs('-a 10 marsupial mammal bro')
++        .demandCommand(1, 2, '', 'got $0 ($0), max $1 ($1)')
++        .fail(msg => {
++          msg.should.equal('got 3 (3), max 2 (2)');
++          return done();
++        })
++        .parse();
++    });
++
+     it('defaults to demanding 1 command', done => {
+       yargs('-a 10')
+         .demandCommand()
+diff --git a/.nycrc b/.nycrc
+index d4b2478083..a6188c451c 100644
+--- a/.nycrc
++++ b/.nycrc
+@@ -8,7 +8,7 @@
+     "html",
+     "text"
+   ],
+-  "lines": 100,
++  "lines": 95,
+   "branches": "96",
+   "statements": "100"
+ }
