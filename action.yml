@@ -1,0 +1,18 @@
+name: agent-pr-gate
+description: Flags quality lowering (skipped tests, suppressions, removed assertions, lowered thresholds) and scope drift in pull requests.
+author: agent-pr-gate contributors
+branding:
+  icon: shield
+  color: orange
+inputs:
+  mode:
+    description: "warn: report findings and pass. block: fail the check when at least one finding has no gate-allow reason."
+    required: false
+    default: warn
+  token:
+    description: Token used to read the pull request diff and .agent-scope.yml through the GitHub API.
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: node24
+  main: dist/index.mjs

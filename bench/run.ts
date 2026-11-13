@@ -100,7 +100,7 @@ const md = [
 ].join("\n");
 
 mkdirSync(join(root, "results"), { recursive: true });
-const base = join(root, "results", `${result.date}-${set}`);
+const base = join(root, "results", `${result.date}-v${DETECTOR_VERSION}-${set}`);
 writeFileSync(`${base}.json`, `${JSON.stringify(result, null, 2)}\n`);
 writeFileSync(`${base}.md`, md);
 console.log(md);
