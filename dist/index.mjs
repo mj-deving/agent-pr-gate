@@ -60,7 +60,7 @@ function parseDiff(diff) {
       oldLeft = header[2] === undefined ? 1 : Number(header[2]);
       newNo = Number(header[3]);
       newLeft = header[4] === undefined ? 1 : Number(header[4]);
-      hunk = { lines: [] };
+      hunk = { lines: [], context: line.slice(header[0].length).trim() };
       file.hunks.push(hunk);
       continue;
     }
@@ -283,7 +283,7 @@ function findClose(line, from, delim) {
 }
 
 // src/detect.ts
-var DETECTOR_VERSION = "0.2.3";
+var DETECTOR_VERSION = "0.4.0";
 function lexFile(file) {
   const path = displayPath(file);
   const lang = languageOf(path);
@@ -302,7 +302,7 @@ function lexFile(file) {
         oldState = lexLine(line.text, lang, oldState).state;
       return { line, lexed };
     });
-    return { rows };
+    return { rows, context: hunk.context };
   });
   return { file, path, lang, test: isTestFile(path), hunks };
 }
@@ -439,6 +439,7 @@ var ASSERTIONS = [
   /^\s*assert\b/,
   /\bpytest\.(?:raises|warns)\s*\(/
 ];
+var isAssertion = (row) => ASSERTIONS.some((re) => re.test(row.lexed.masked));
 var normalize = (s) => s.trim().replace(/\s+/g, " ").replace(/[;,]+$/, "");
 function rowsOf(f, kind, keep) {
   const out = [];
@@ -456,100 +457,377 @@ function changeBlock(loc) {
     k--;
   return k;
 }
-var isAssertion = (row) => ASSERTIONS.some((re) => re.test(row.lexed.masked));
-function assertRemovedFindings(files) {
-  const code = files.filter((f) => f.lang !== "other");
-  const added = code.flatMap((f) => rowsOf(f, "+", isAssertion));
-  const pool = new Map;
-  for (const a of added) {
-    const key = normalize(a.row.line.text);
-    pool.set(key, [...pool.get(key) ?? [], a]);
+function closing(s, open) {
+  let depth = 0;
+  for (let i = open;i < s.length; i++) {
+    const c = s[i];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if ((c === ")" || c === "]" || c === "}") && --depth === 0)
+      return i;
   }
-  const claimed = new Set;
-  const targets = files.filter((f) => f.test && f.file.status !== "deleted");
-  const unmatched = targets.flatMap((f) => rowsOf(f, "-", isAssertion).filter((r) => {
-    const twin = pool.get(normalize(r.row.line.text))?.shift();
-    if (twin)
-      claimed.add(twin);
-    return !twin;
-  }).map((r) => ({ f, r })));
-  const rewrites = new Map;
-  for (const a of added) {
-    if (claimed.has(a))
-      continue;
-    const blocks = rewrites.get(a.hunk) ?? new Map;
-    blocks.set(changeBlock(a), (blocks.get(changeBlock(a)) ?? 0) + 1);
-    rewrites.set(a.hunk, blocks);
-  }
-  return unmatched.filter(({ r }) => {
-    const blocks = rewrites.get(r.hunk);
-    const n = blocks?.get(changeBlock(r)) ?? 0;
-    if (n > 0)
-      blocks.set(changeBlock(r), n - 1);
-    return n === 0;
-  }).map(({ f, r }) => finding(f.path, r.row, "assert-removed", allowForOld(r.hunk, r.idx, f.lang)));
+  return -1;
 }
-var JS_TEST_HEAD = /\b(?:it|test|specify)(?:\.\w+)*\s*\(\s*(["'`])/g;
-var PY_TEST_DEF = /^\s*(?:async\s+)?def\s+(test\w*)\s*\(/;
-function testName(row, lang) {
-  const { masked } = row.lexed;
-  if (lang === "py")
-    return PY_TEST_DEF.exec(masked)?.[1] ?? null;
-  if (lang !== "js")
+function items(s, open, close) {
+  const out = [];
+  let depth = 0;
+  let start = open + 1;
+  for (let i = open + 1;i < close; i++) {
+    const c = s[i];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}")
+      depth--;
+    else if (c === "," && depth === 0) {
+      out.push(s.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(s.slice(start, close));
+  return out.map((p) => p.trim()).filter(Boolean);
+}
+function literalCount(expr) {
+  const t = expr.trim();
+  if (!/^[[(]/.test(t) || closing(t, 0) !== t.length - 1)
+    return 1;
+  const parts = items(t, 0, t.length - 1);
+  if (parts.some((p) => /\bfor\b/.test(p)))
+    return 1;
+  return Math.max(1, parts.length);
+}
+function sideText(hunk, side) {
+  const t = { idxs: [], starts: [], masked: "", raw: "" };
+  const skip = side === "old" ? "+" : "-";
+  hunk.rows.forEach((row, idx) => {
+    if (row.line.kind === skip)
+      return;
+    t.idxs.push(idx);
+    t.starts.push(t.masked.length);
+    t.masked += `${row.lexed.masked}
+`;
+    t.raw += `${row.line.text}
+`;
+  });
+  return t;
+}
+function sideRowAt(t, offset) {
+  let lo = 0;
+  let hi = t.starts.length - 1;
+  while (lo < hi) {
+    const mid = lo + hi + 1 >> 1;
+    if (t.starts[mid] <= offset)
+      lo = mid;
+    else
+      hi = mid - 1;
+  }
+  return lo;
+}
+var indentOf = (text) => text.length - text.trimStart().length;
+var PY_DEF = /^(\s*)(?:async\s+)?def\s+(\w+)\s*\(/;
+function pyDefs(t) {
+  const out = [];
+  let pending = [];
+  let resumeAt = 0;
+  for (let k = 0;k < t.idxs.length; k++) {
+    const start = t.starts[k];
+    if (start < resumeAt)
+      continue;
+    const line = t.masked.slice(start, (t.starts[k + 1] ?? t.masked.length + 1) - 1);
+    const code = line.trim();
+    if (!code)
+      continue;
+    const indent = indentOf(line);
+    if (code.startsWith("@")) {
+      const call = /^@[\w.]+\s*\(/.exec(code);
+      const at = start + indent;
+      const close = call ? closing(t.masked, at + call[0].length - 1) : -1;
+      const end = close >= 0 ? close + 1 : start + line.length;
+      pending.push({ indent, text: t.masked.slice(at, end) });
+      resumeAt = end;
+      continue;
+    }
+    const m = PY_DEF.exec(line);
+    if (m) {
+      const open = start + m[0].length - 1;
+      const close = closing(t.masked, open);
+      const args = close < 0 ? [] : items(t.masked, open, close).map((a) => /^\**(\w+)/.exec(a)?.[1] ?? "");
+      out.push({ at: k, through: close < 0 ? k : sideRowAt(t, close), name: m[2], decorators: pending.filter((d) => d.indent === indent).map((d) => d.text), args });
+    }
+    pending = [];
+  }
+  return out;
+}
+function parametrizeRows(decorator) {
+  const m = /\bparametrize\s*\(/.exec(decorator);
+  if (!m)
+    return 1;
+  const open = m.index + m[0].length - 1;
+  const close = closing(decorator, open);
+  if (close < 0)
+    return 1;
+  const args = items(decorator, open, close);
+  const keyword = args.find((a) => /^argvalues\s*=/.test(a));
+  const values = keyword ? keyword.replace(/^argvalues\s*=/, "") : args.filter((a) => !/^\w+\s*=/.test(a))[1];
+  return values ? literalCount(values) : 1;
+}
+function fixtureParams(decorator) {
+  if (!/\bfixture\b/.test(decorator))
     return null;
-  JS_TEST_HEAD.lastIndex = 0;
-  const m = JS_TEST_HEAD.exec(masked);
+  const m = /\bparams\s*=\s*/.exec(decorator);
   if (!m)
     return null;
-  const open = m.index + m[0].length;
-  const close = masked.indexOf(m[1], open);
-  return row.line.text.slice(open, close < 0 ? undefined : close);
+  const rest = decorator.slice(m.index + m[0].length);
+  const close = /^[[(]/.test(rest) ? closing(rest, 0) : -1;
+  return close < 0 ? 1 : literalCount(rest.slice(0, close + 1));
 }
-var basename = (path) => path.slice(path.lastIndexOf("/") + 1);
-function testDeletedFindings(files) {
-  const defs = (f, kind) => rowsOf(f, kind, (row) => testName(row, f.lang) !== null).map((loc) => ({ loc, name: testName(loc.row, f.lang) }));
-  const tests = files.filter((f) => f.test).map((f) => ({ f, added: defs(f, "+"), removed: defs(f, "-") }));
-  const pool = new Map;
-  for (const { added } of tests) {
-    for (const d of added)
-      pool.set(d.name, [...pool.get(d.name) ?? [], d.loc]);
-  }
-  const claimed = new Set;
-  const missingOf = (removed) => removed.filter((d) => {
-    const loc = pool.get(d.name)?.shift();
-    if (loc)
-      claimed.add(loc);
-    return !loc;
-  });
-  const matched = tests.map((t) => ({ ...t, missing: missingOf(t.removed) }));
-  const addedBasenames = new Set(files.filter((f) => f.file.status !== "deleted" && f.file.newPath).map((f) => basename(f.path)));
+var JS_HEAD = /(?<![\w$.])(?<!\bfunction\s+)(?:it|test|specify)((?:\.\w+)*)\s*([(`])/g;
+var JS_MODIFIER = /^(?:only|skip|todo|fails|failing|concurrent|sequential|each|skipIf|runIf|fixme)$/;
+function jsHeads(t) {
   const out = [];
+  for (const m of t.masked.matchAll(JS_HEAD)) {
+    const chain = m[1].split(".").filter(Boolean);
+    if (!chain.every((c) => JS_MODIFIER.test(c)))
+      continue;
+    const at = sideRowAt(t, m.index);
+    let pos = m.index + m[0].length - 1;
+    let rows = 1;
+    if (m[2] === "`" || chain.some((c) => c === "each" || c === "skipIf" || c === "runIf")) {
+      const close = m[2] === "`" ? t.masked.indexOf("`", pos + 1) : closing(t.masked, pos);
+      if (close < 0) {
+        out.push({ at, through: sideRowAt(t, pos), name: "", rows });
+        continue;
+      }
+      if (chain.includes("each")) {
+        rows = m[2] === "`" ? Math.max(1, t.raw.slice(pos + 1, close).split(`
+`).filter((l) => l.trim()).length - 1) : literalCount(t.masked.slice(pos + 1, close));
+      }
+      pos = close + 1;
+      while (/\s/.test(t.masked[pos] ?? ""))
+        pos++;
+      if (t.masked[pos] !== "(") {
+        out.push({ at, through: sideRowAt(t, pos), name: "", rows });
+        continue;
+      }
+    }
+    let q = pos + 1;
+    while (/\s/.test(t.masked[q] ?? ""))
+      q++;
+    const quote = t.masked[q];
+    const end = quote === "'" || quote === '"' || quote === "`" ? t.masked.indexOf(quote, q + 1) : -1;
+    out.push({ at, through: sideRowAt(t, Math.min(q, t.masked.length - 1)), name: end < 0 ? "" : t.raw.slice(q + 1, end), rows });
+  }
+  return out;
+}
+function headerTest(context, lang) {
+  if (lang === "py")
+    return /^(?:async\s+)?def\s+(test\w*)/.exec(context)?.[1] ?? "";
+  return /^(?:it|test|specify)(?:\.\w+)*\s*\(\s*(["'`])(.*?)\1/.exec(context)?.[2] ?? "";
+}
+function buildLedger(files) {
+  const tests = files.filter((f) => f.test && f.lang !== "other");
+  const sides = ["old", "new"];
+  const texts = new Map;
+  for (const f of tests) {
+    for (const h of f.hunks)
+      texts.set(h, { old: sideText(h, "old"), new: sideText(h, "new") });
+  }
+  const fixtures = { old: new Map, new: new Map };
+  const defs = new Map;
+  for (const f of tests.filter((x) => x.lang === "py")) {
+    for (const h of f.hunks) {
+      for (const side of sides) {
+        const t = texts.get(h)[side];
+        const found = pyDefs(t);
+        defs.set(t, found);
+        for (const d of found) {
+          const n = d.decorators.map(fixtureParams).find((x) => x !== null);
+          if (n != null)
+            fixtures[side].set(d.name, n);
+        }
+      }
+    }
+  }
+  const ledger = { heads: new Map, owners: { old: new Map, new: new Map } };
+  for (const f of tests) {
+    const heads = { old: [], new: [] };
+    for (const hunk of f.hunks) {
+      for (const side of sides) {
+        const t = texts.get(hunk)[side];
+        const found = f.lang === "py" ? defs.get(t).filter((d) => d.name.startsWith("test")).map((d) => ({
+          at: d.at,
+          through: d.through,
+          name: d.name,
+          rows: d.decorators.reduce((n, dec) => n * parametrizeRows(dec), 1) * d.args.reduce((n, a) => n * (fixtures[side].get(a) ?? 1), 1)
+        })) : jsHeads(t);
+        const byRow = new Map;
+        for (const x of found) {
+          if (byRow.has(x.at))
+            continue;
+          const idx = t.idxs[x.at];
+          const row = hunk.rows[idx];
+          const head = { file: f, hunk, idx, row, name: x.name, rows: x.rows, indent: indentOf(row.line.text), through: x.through };
+          byRow.set(x.at, head);
+          heads[side].push(head);
+        }
+        const header = headerTest(hunk.context, f.lang);
+        const stack = [];
+        let seenHead = false;
+        t.idxs.forEach((idx, k) => {
+          const row = hunk.rows[idx];
+          if (row.lexed.masked.trim()) {
+            const indent = indentOf(row.line.text);
+            while (stack.length && stack[stack.length - 1].indent >= indent && stack[stack.length - 1].through < k)
+              stack.pop();
+            const own = byRow.get(k);
+            if (own) {
+              stack.push(own);
+              seenHead = true;
+            }
+          }
+          const owner = stack[stack.length - 1] ?? (!seenHead && header ? { header } : null);
+          ledger.owners[side].set(row, owner);
+        });
+      }
+    }
+    ledger.heads.set(f, heads);
+  }
+  return ledger;
+}
+var isRemoved = (h) => h.row.line.kind === "-";
+var isAdded = (h) => h.row.line.kind === "+";
+var basename = (path) => path.slice(path.lastIndexOf("/") + 1);
+function judgeTests(files, ledger) {
+  const partner = new Map;
+  const findings = [];
+  const spare = new Map;
+  for (const { old, new: now } of ledger.heads.values()) {
+    const before = new Map(old.map((h) => [h.row, h.rows]));
+    for (const h of now)
+      spare.set(h, isAdded(h) ? h.rows : Math.max(0, h.rows - (before.get(h.row) ?? h.rows)));
+  }
+  const byName = new Map;
+  for (const { new: now } of ledger.heads.values()) {
+    for (const h of now.filter((x) => isAdded(x) && x.name))
+      byName.set(h.name, [...byName.get(h.name) ?? [], h]);
+  }
+  const missingIn = new Map;
+  for (const [f, { old }] of ledger.heads) {
+    const missing = [];
+    for (const r of old.filter(isRemoved)) {
+      const twin = r.name ? byName.get(r.name)?.shift() : undefined;
+      if (twin) {
+        partner.set(r, twin);
+        spare.set(twin, spare.get(twin) - 1);
+      } else
+        missing.push(r);
+    }
+    missingIn.set(f, missing);
+  }
   for (const f of files) {
     const from = f.file.oldPath;
     if (f.file.status === "renamed" && from && isTestFile(from) && !f.test) {
-      out.push({ file: f.path, line: 0, side: "new", class: "test-deleted", text: `test file renamed out of the test convention (from ${from})` });
+      findings.push({ file: f.path, line: 0, side: "new", class: "test-deleted", text: `test file renamed out of the test convention (from ${from})` });
     }
   }
-  for (const { f, added, removed, missing } of matched) {
+  const addedBasenames = new Set(files.filter((f) => f.file.status !== "deleted" && f.file.newPath).map((f) => basename(f.path)));
+  for (const [f, { old, new: now }] of ledger.heads) {
+    const missing = missingIn.get(f);
     if (f.file.status === "deleted") {
-      const moved = removed.length > 0 ? missing.length === 0 : addedBasenames.has(basename(f.path));
+      const removed = old.filter(isRemoved).length;
+      const moved = removed > 0 ? missing.length === 0 : addedBasenames.has(basename(f.path));
       if (!moved) {
-        const detail = removed.length > 0 ? `${missing.length} of ${removed.length} tests not re-added` : "no tests re-added";
-        out.push({ file: f.path, line: 0, side: "old", class: "test-deleted", text: `deleted test file (${detail})` });
+        const detail = removed > 0 ? `${missing.length} of ${removed} tests not re-added` : "no tests re-added";
+        findings.push({ file: f.path, line: 0, side: "old", class: "test-deleted", text: `deleted test file (${detail})` });
       }
       continue;
     }
-    const free = added.filter((d) => !claimed.has(d.loc)).map((d) => d.loc);
-    for (const { loc } of missing) {
-      const k = free.findIndex((x) => x.hunk === loc.hunk && changeBlock(x) === changeBlock(loc));
-      if (k >= 0) {
-        free.splice(k, 1);
+    const take = (h) => {
+      if (h)
+        spare.set(h, spare.get(h) - 1);
+      return h;
+    };
+    const unexplained = missing.filter((r) => {
+      const renamed = take(now.find((a) => isAdded(a) && spare.get(a) > 0 && a.hunk === r.hunk && changeBlock(a) === changeBlock(r)));
+      if (renamed)
+        partner.set(r, renamed);
+      return !renamed;
+    });
+    for (const r of unexplained) {
+      if (take(now.find((a) => a.rows > 1 && spare.get(a) > 0)))
         continue;
-      }
-      out.push(finding(f.path, loc.row, "test-deleted", allowForOld(loc.hunk, loc.idx, f.lang)));
+      findings.push(finding(f.path, r.row, "test-deleted", allowForOld(r.hunk, r.idx, f.lang)));
     }
   }
+  return { partner, findings };
+}
+function judgeAssertions(files, ledger, partner) {
+  const keyOf = (h) => `${h.file.path}\x00${h.name || `#${h.file.hunks.indexOf(h.hunk)}:${h.idx}`}`;
+  const account = (path, owner) => {
+    if (!owner)
+      return null;
+    if ("header" in owner)
+      return { key: `${path}\x00${owner.header}`, weight: 1 };
+    if (!isRemoved(owner))
+      return { key: keyOf(owner), weight: owner.rows };
+    const now = partner.get(owner);
+    return now ? { key: keyOf(now), weight: owner.rows } : "judged-with-test";
+  };
+  const code = files.filter((f) => f.lang !== "other");
+  const added = code.flatMap((f) => rowsOf(f, "+", isAssertion).map((loc) => ({ f, loc })));
+  const pool = new Map;
+  for (const { loc } of added) {
+    const key = normalize(loc.row.line.text);
+    pool.set(key, [...pool.get(key) ?? [], loc]);
+  }
+  const claimed = new Set;
+  const targets = files.filter((f) => f.test && f.file.status !== "deleted");
+  const unmatched = targets.flatMap((f) => rowsOf(f, "-", isAssertion).filter((loc) => {
+    const twin = pool.get(normalize(loc.row.line.text))?.shift();
+    if (twin)
+      claimed.add(twin);
+    return !twin;
+  }).map((loc) => ({ f, loc })));
+  const budget = new Map;
+  const blocks = new Map;
+  for (const { f, loc } of added) {
+    if (claimed.has(loc))
+      continue;
+    const acc = account(f.path, ledger.owners.new.get(loc.row));
+    if (acc && acc !== "judged-with-test") {
+      budget.set(acc.key, (budget.get(acc.key) ?? 0) + acc.weight);
+      continue;
+    }
+    const perBlock = blocks.get(loc.hunk) ?? new Map;
+    perBlock.set(changeBlock(loc), (perBlock.get(changeBlock(loc)) ?? 0) + 1);
+    blocks.set(loc.hunk, perBlock);
+  }
+  const out = [];
+  for (const { f, loc } of unmatched) {
+    const acc = account(f.path, ledger.owners.old.get(loc.row));
+    if (acc === "judged-with-test")
+      continue;
+    let offset;
+    if (acc) {
+      const left = budget.get(acc.key) ?? 0;
+      offset = left >= acc.weight;
+      if (offset)
+        budget.set(acc.key, left - acc.weight);
+    } else {
+      const perBlock = blocks.get(loc.hunk);
+      const n = perBlock?.get(changeBlock(loc)) ?? 0;
+      offset = n > 0;
+      if (offset)
+        perBlock.set(changeBlock(loc), n - 1);
+    }
+    if (!offset)
+      out.push(finding(f.path, loc.row, "assert-removed", allowForOld(loc.hunk, loc.idx, f.lang)));
+  }
   return out;
+}
+function testAccountingFindings(files) {
+  const ledger = buildLedger(files);
+  const { partner, findings } = judgeTests(files, ledger);
+  return [...judgeAssertions(files, ledger, partner), ...findings];
 }
 var CONFIG_NAMES = new Set([
   "package.json",
@@ -631,8 +909,7 @@ function detectFiles(files) {
   const lexed = files.filter((f) => !f.binary).map(lexFile);
   const findings = [
     ...lexed.flatMap(addedLineFindings),
-    ...assertRemovedFindings(lexed),
-    ...testDeletedFindings(lexed),
+    ...testAccountingFindings(lexed),
     ...lexed.flatMap(thresholdFindings)
   ];
   return sortFindings(dedupe(findings));

@@ -1,6 +1,6 @@
 {
   "name": "agent-pr-gate",
-  "version": "0.2.3",
+  "version": "0.4.0",
   "description": "GitHub Action that flags quality lowering and scope drift in pull requests written by coding agents.",
   "license": "Apache-2.0",
   "type": "module",

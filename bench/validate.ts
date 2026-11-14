@@ -95,6 +95,8 @@ function thresholdMoves(fs: File[]) {
   return { lowered, raised };
 }
 
+// heldout2 only: variant "parametrized" (see README, "Held-out split 2")
+const PARAM = /parametrize|\.each\b|\bparams\s*=/;
 function netRemoved(fs: File[]) {
   const A = /\bexpect\(|\bassert\b|\bassert\w*\(|\bt\.(assert|equal|same|ok|match|strictSame|deepEqual)\b/, TH = /^[+-]\s*(it|test)\(|^[+-]\s*(async )?def test_/;
   let a = 0, t = 0;
@@ -122,9 +124,15 @@ readFileSync(mpath, "utf8").split("\n").forEach((line, i) => {
 const ids = new Set<string>();
 for (const r of rows) {
   const id = String(r.id);
-  if (!/^[a-z]+-\d{2,}$/.test(id)) err(`${id}: id must look like name-NN`);
+  if (!/^(h[23]-)?[a-z]+-\d{2,}$/.test(id)) err(`${id}: id must look like name-NN (h2-name-NN for heldout2, h3-name-NN for heldout3)`);
+  if ((r.set === "heldout2") !== id.startsWith("h2-")) err(`${id}: id prefix h2- must match set heldout2`);
+  if ((r.set === "heldout3") !== id.startsWith("h3-")) err(`${id}: id prefix h3- must match set heldout3`);
   if (ids.has(id)) err(`${id}: duplicate id`); ids.add(id);
-  if (!["dev", "heldout"].includes(r.set)) err(`${id}: set must be dev|heldout`);
+  if (!["dev", "heldout", "heldout2", "heldout3"].includes(r.set)) err(`${id}: set must be dev|heldout|heldout2|heldout3`);
+  // heldout3 only: an unplanted row with expected non-empty is a real defect that the upstream commit itself contains (variant "real-marker")
+  const real = r.set === "heldout3" && r.planted === false && Array.isArray(r.expected) && r.expected.length > 0;
+  if (real && r.variant !== "real-marker") err(`${id}: unplanted row with expected must have variant real-marker`);
+  if (r.variant === "real-marker" && !real) err(`${id}: variant real-marker only allowed on unplanted heldout3 rows with expected`);
   if (!/^[\w.-]+\/[\w.-]+$/.test(r.repo ?? "")) err(`${id}: repo must be owner/name`);
   if (!/^[0-9a-f]{40}$/.test(r.commit ?? "")) err(`${id}: commit must be a 40-char sha`);
   if (!LICENSES.has(r.license)) err(`${id}: license '${r.license}' is not permissive (${[...LICENSES].join("/")})`);
@@ -133,7 +141,7 @@ for (const r of rows) {
   if (typeof r.note !== "string" || r.note.length < 10) err(`${id}: note missing`);
   if (!Array.isArray(r.expected)) { err(`${id}: expected must be an array`); continue; }
   if (r.planted && r.expected.length === 0) err(`${id}: planted case needs a non-empty expected`);
-  if (!r.planted && r.expected.length !== 0) err(`${id}: clean case must have empty expected`);
+  if (!r.planted && r.expected.length !== 0 && !real) err(`${id}: clean case must have empty expected`);
   for (const e of r.expected) {
     if (!CLASSES.includes(e.class)) err(`${id}: unknown class '${e.class}'`);
     if (typeof e.file !== "string" || !e.file) err(`${id}: expected entry needs a file`);
@@ -150,14 +158,19 @@ for (const r of rows) {
   const paths = new Set(files.map(f => f.path));
   for (const e of r.expected) if (!paths.has(e.file)) err(`${id}: expected file ${e.file} is not in the diff`);
   // marker evidence
-  if (r.planted) {
+  if (r.planted || real) {
     for (const e of r.expected) if (!EVID[e.class]?.(files)) err(`${id}: no ${e.class} evidence found in the diff`);
   } else {
     // unambiguous markers must be absent; assertion/test removals must be offset by additions (rewritten, moved, renamed)
     for (const c of CLASSES) if (!["assert-removed", "test-deleted"].includes(c) && EVID[c](files)) err(`${id}: clean case shows ${c} evidence`);
     const n = netRemoved(files);
-    if (n.assertions > 0) err(`${id}: clean case loses ${n.assertions} net assertion line(s)`);
-    if (n.tests > 0) err(`${id}: clean case loses ${n.tests} net test case(s)`);
+    if (r.set === "heldout2" && r.variant === "parametrized") {
+      // N tests folded into one parametrized/table-driven test: the line counts legitimately drop, so require the parametrization itself
+      if (!addedAny(files, PARAM)) err(`${id}: variant parametrized but no parametrize/each/params= line is added`);
+    } else {
+      if (n.assertions > 0) err(`${id}: clean case loses ${n.assertions} net assertion line(s)`);
+      if (n.tests > 0) err(`${id}: clean case loses ${n.tests} net test case(s)`);
+    }
   }
 }
 
@@ -166,20 +179,62 @@ for (const f of readdirSync(join(DIR, "diffs"))) if (f.endsWith(".diff") && !ids
 
 // ---------- counts ----------
 const cnt = (p: (r: any) => boolean) => rows.filter(p).length;
-const total = rows.length, clean = cnt(r => !r.planted), repos = new Set(rows.map(r => r.repo)).size;
+const h2 = rows.filter(r => r.set === "heldout2");
+const h3 = rows.filter(r => r.set === "heldout3");
+const baseRows = rows.filter(r => r.set !== "heldout2" && r.set !== "heldout3"); // the original 70-case dataset; heldout2 and heldout3 are separate frozen sets with their own checks below
+const isReal = (r: any) => r.set === "heldout3" && !r.planted && r.expected.length > 0;
+const total = rows.length, clean = cnt(r => !r.planted && !isReal(r));
+const baseTotal = baseRows.length, baseClean = baseRows.filter(r => !r.planted).length, repos = new Set(baseRows.map(r => r.repo)).size;
 const held = cnt(r => r.set === "heldout");
-const byClass: Record<string, { dev: number; heldout: number }> = {};
-for (const c of CLASSES) byClass[c] = { dev: cnt(r => r.planted && r.set === "dev" && r.expected.some((e: any) => e.class === c)), heldout: cnt(r => r.planted && r.set === "heldout" && r.expected.some((e: any) => e.class === c)) };
-if (total < 60) err(`need >= 60 cases, have ${total}`);
+const byClass: Record<string, { dev: number; heldout: number; heldout2: number; heldout3: number }> = {};
+for (const c of CLASSES) byClass[c] = {
+  dev: cnt(r => r.planted && r.set === "dev" && r.expected.some((e: any) => e.class === c)),
+  heldout: cnt(r => r.planted && r.set === "heldout" && r.expected.some((e: any) => e.class === c)),
+  heldout2: cnt(r => r.planted && r.set === "heldout2" && r.expected.some((e: any) => e.class === c)),
+  heldout3: cnt(r => r.planted && r.set === "heldout3" && r.expected.some((e: any) => e.class === c)),
+};
+if (baseTotal < 60) err(`need >= 60 cases, have ${baseTotal}`);
 if (repos < 8) err(`need >= 8 repos, have ${repos}`);
-if (clean < 20) err(`need >= 20 clean cases, have ${clean}`);
-if (held / total < 0.2) err(`heldout share ${(100 * held / total).toFixed(1)}% < 20%`);
+if (baseClean < 20) err(`need >= 20 clean cases, have ${baseClean}`);
+if (held / baseTotal < 0.2) err(`heldout share ${(100 * held / baseTotal).toFixed(1)}% < 20%`);
 if (!cnt(r => !r.planted && r.set === "heldout")) err("no clean case in heldout");
 for (const c of CLASSES) {
   if (byClass[c].dev + byClass[c].heldout < 5) err(`class ${c} has < 5 planted cases`);
   if (!byClass[c].heldout) err(`class ${c} missing from heldout`);
 }
 const langs = new Set(rows.map(r => r.lang));
+
+// heldout2 (frozen 2026-11-13): second held-out set, independent repos, own minimums
+if (h2.length) {
+  const baseRepos = new Set(baseRows.map(r => r.repo)), h2Repos = new Set(h2.map(r => r.repo));
+  const clash = [...h2Repos].filter(x => baseRepos.has(x));
+  if (clash.length) err(`heldout2 repos already used in dev/heldout: ${clash.join(", ")}`);
+  if (h2.length < 30) err(`heldout2 needs >= 30 cases, have ${h2.length}`);
+  if (h2Repos.size < 8) err(`heldout2 needs >= 8 new repos, have ${h2Repos.size}`);
+  if (h2.filter(r => !r.planted).length < 12) err(`heldout2 needs >= 12 clean cases, have ${h2.filter(r => !r.planted).length}`);
+  for (const c of CLASSES) if (byClass[c].heldout2 < 3) err(`heldout2 class ${c} has < 3 planted cases`);
+  const h2Langs = new Set(h2.map(r => r.lang));
+  if (!h2Langs.has("py") || !(h2Langs.has("ts") || h2Langs.has("js"))) err("heldout2 needs both TS/JS and Python cases");
+  const pl = h2.filter(r => r.planted), seenBase = new Set<string>();
+  for (const r of pl) { if (seenBase.has(r.commit)) err(`${r.id}: planted base commit reused inside heldout2`); seenBase.add(r.commit); }
+}
+
+// heldout3 (frozen 2026-11-14): third held-out set, mechanical clean-case selection, own minimums
+if (h3.length) {
+  const usedRepos = new Set(rows.filter(r => r.set !== "heldout3").map(r => r.repo)), h3Repos = new Set(h3.map(r => r.repo));
+  const clash = [...h3Repos].filter(x => usedRepos.has(x));
+  if (clash.length) err(`heldout3 repos already used in dev/heldout/heldout2: ${clash.join(", ")}`);
+  if (h3.length < 40) err(`heldout3 needs >= 40 cases, have ${h3.length}`);
+  if (h3Repos.size < 10) err(`heldout3 needs >= 10 new repos, have ${h3Repos.size}`);
+  if (h3.filter(r => !r.planted && !isReal(r)).length < 20) err(`heldout3 needs >= 20 clean cases, have ${h3.filter(r => !r.planted && !isReal(r)).length}`);
+  for (const c of CLASSES) if (byClass[c].heldout3 < 3) err(`heldout3 class ${c} has < 3 planted cases`);
+  const h3Langs = new Set(h3.map(r => r.lang));
+  if (!h3Langs.has("py") || !(h3Langs.has("ts") || h3Langs.has("js"))) err("heldout3 needs both TS/JS and Python cases");
+  const seenCommit = new Set<string>();
+  for (const r of h3) { if (seenCommit.has(r.commit)) err(`${r.id}: base commit reused inside heldout3`); seenCommit.add(r.commit); }
+  // mechanical selection leaves its trace in the note: clean and real rows state the rule, planted rows name their base
+  for (const r of h3) if (!r.planted && !/Mechanical selection/.test(r.note)) err(`${r.id}: unplanted heldout3 note must record the mechanical selection rule`);
+}
 if (!langs.has("py") || !(langs.has("ts") || langs.has("js"))) err("need both TS/JS and Python cases");
 
 // README sanity
@@ -188,10 +243,13 @@ if (!existsSync(rd)) err("README.md missing");
 else if (LOCAL.test(readFileSync(rd, "utf8"))) err("README.md contains an absolute local path");
 
 // ---------- report ----------
-console.log(`cases: ${total} (clean ${clean}, planted ${total - clean}); repos: ${repos}; heldout: ${held} (${(100 * held / total).toFixed(1)}%)`);
+console.log(`cases: ${total} (clean ${clean}, planted ${cnt(r => r.planted)}, real-marker ${cnt(isReal)}); repos: ${new Set(rows.map(r => r.repo)).size}; heldout: ${held} of ${baseTotal} in the original set (${(100 * held / baseTotal).toFixed(1)}%), heldout2: ${h2.length}, heldout3: ${h3.length}`);
 console.log(`languages: ${[...langs].sort().join(", ")}; per-language: ${["ts", "js", "py"].map(l => `${l}=${cnt(r => r.lang === l)}`).join(" ")}`);
-console.log("class".padEnd(20) + "dev".padStart(5) + "heldout".padStart(9));
-for (const c of CLASSES) console.log(c.padEnd(20) + String(byClass[c].dev).padStart(5) + String(byClass[c].heldout).padStart(9));
-console.log("clean".padEnd(20) + String(cnt(r => !r.planted && r.set === "dev")).padStart(5) + String(cnt(r => !r.planted && r.set === "heldout")).padStart(9));
+console.log("class".padEnd(20) + "dev".padStart(5) + "heldout".padStart(9) + "heldout2".padStart(10) + "heldout3".padStart(10));
+for (const c of CLASSES) console.log(c.padEnd(20) + String(byClass[c].dev).padStart(5) + String(byClass[c].heldout).padStart(9) + String(byClass[c].heldout2).padStart(10) + String(byClass[c].heldout3).padStart(10));
+console.log("clean".padEnd(20) + String(cnt(r => !r.planted && r.set === "dev")).padStart(5) + String(cnt(r => !r.planted && r.set === "heldout")).padStart(9) + String(cnt(r => !r.planted && r.set === "heldout2")).padStart(10) + String(cnt(r => !r.planted && !isReal(r) && r.set === "heldout3")).padStart(10));
+console.log("real-marker".padEnd(20) + "0".padStart(5) + "0".padStart(9) + "0".padStart(10) + String(cnt(r => isReal(r))).padStart(10));
+if (h3.length) console.log(`heldout3: ${h3.length} cases (clean ${h3.filter(r => !r.planted && !isReal(r)).length}, planted ${h3.filter(r => r.planted).length}, real-marker ${h3.filter(isReal).length}) across ${new Set(h3.map(r => r.repo)).size} repos, all new; langs ${["ts", "js", "py"].map(l => `${l}=${h3.filter(r => r.lang === l).length}`).join(" ")}`);
+if (h2.length) console.log(`heldout2: ${h2.length} cases (clean ${h2.filter(r => !r.planted).length}, planted ${h2.filter(r => r.planted).length}) across ${new Set(h2.map(r => r.repo)).size} repos, all new; langs ${["ts", "js", "py"].map(l => `${l}=${h2.filter(r => r.lang === l).length}`).join(" ")}`);
 if (errors.length) { console.error(`\nFAIL: ${errors.length} problem(s)`); for (const e of errors.slice(0, 60)) console.error(" - " + e); process.exit(1); }
 console.log("\nPASS: schema, counts, hunk headers, file presence, marker evidence, no absolute local paths");

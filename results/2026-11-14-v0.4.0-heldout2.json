@@ -1,27 +1,19 @@
 {
-  "date": "2026-11-13",
-  "set": "dev",
-  "detectorVersion": "0.2.3",
-  "datasetVersion": "92c7e936958a",
-  "cases": 50,
+  "date": "2026-11-14",
+  "set": "heldout2",
+  "detectorVersion": "0.4.0",
+  "datasetVersion": "b7feccc36acb",
+  "cases": 44,
   "overall": {
     "recall": 100,
-    "precision": 96.9
+    "precision": 100
   },
   "cleanFalseAlarmRate": 0,
   "cleanFlagged": 0,
-  "cleanTotal": 19,
+  "cleanTotal": 17,
   "perClass": [
     {
       "class": "skip",
-      "tp": 5,
-      "fn": 0,
-      "fp": 0,
-      "recall": 100,
-      "precision": 100
-    },
-    {
-      "class": "only",
       "tp": 4,
       "fn": 0,
       "fp": 0,
@@ -29,8 +21,16 @@
       "precision": 100
     },
     {
+      "class": "only",
+      "tp": 3,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
       "class": "type-suppress",
-      "tp": 5,
+      "tp": 4,
       "fn": 0,
       "fp": 0,
       "recall": 100,
@@ -38,11 +38,11 @@
     },
     {
       "class": "lint-suppress",
-      "tp": 5,
+      "tp": 4,
       "fn": 0,
-      "fp": 1,
+      "fp": 0,
       "recall": 100,
-      "precision": 83.3
+      "precision": 100
     },
     {
       "class": "assert-removed",
@@ -69,13 +69,5 @@
       "precision": 100
     }
   ],
-  "failures": [
-    {
-      "id": "skip-06",
-      "kind": "false-alarm",
-      "class": "lint-suppress",
-      "file": "tests/test_staticfiles.py",
-      "text": "pass  # pragma: no cover - The connection is rejected before entering the context."
-    }
-  ]
+  "failures": []
 }

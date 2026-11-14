@@ -1,0 +1,73 @@
+{
+  "date": "2026-11-14",
+  "set": "heldout",
+  "detectorVersion": "0.4.0",
+  "datasetVersion": "b7feccc36acb",
+  "cases": 20,
+  "overall": {
+    "recall": 100,
+    "precision": 100
+  },
+  "cleanFalseAlarmRate": 0,
+  "cleanFlagged": 0,
+  "cleanTotal": 5,
+  "perClass": [
+    {
+      "class": "skip",
+      "tp": 3,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "only",
+      "tp": 2,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "type-suppress",
+      "tp": 2,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "lint-suppress",
+      "tp": 2,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "assert-removed",
+      "tp": 2,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "test-deleted",
+      "tp": 2,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "threshold-lowered",
+      "tp": 2,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    }
+  ],
+  "failures": []
+}

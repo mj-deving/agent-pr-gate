@@ -1,20 +1,20 @@
 {
-  "date": "2026-11-13",
-  "set": "heldout",
-  "detectorVersion": "0.2.3",
-  "datasetVersion": "92c7e936958a",
-  "cases": 20,
+  "date": "2026-11-14",
+  "set": "dev",
+  "detectorVersion": "0.4.0",
+  "datasetVersion": "b7feccc36acb",
+  "cases": 50,
   "overall": {
     "recall": 100,
-    "precision": 93.8
+    "precision": 96.9
   },
-  "cleanFalseAlarmRate": 20,
-  "cleanFlagged": 1,
-  "cleanTotal": 5,
+  "cleanFalseAlarmRate": 0,
+  "cleanFlagged": 0,
+  "cleanTotal": 19,
   "perClass": [
     {
       "class": "skip",
-      "tp": 3,
+      "tp": 5,
       "fn": 0,
       "fp": 0,
       "recall": 100,
@@ -22,7 +22,7 @@
     },
     {
       "class": "only",
-      "tp": 2,
+      "tp": 4,
       "fn": 0,
       "fp": 0,
       "recall": 100,
@@ -30,7 +30,7 @@
     },
     {
       "class": "type-suppress",
-      "tp": 2,
+      "tp": 5,
       "fn": 0,
       "fp": 0,
       "recall": 100,
@@ -38,15 +38,15 @@
     },
     {
       "class": "lint-suppress",
-      "tp": 2,
+      "tp": 5,
       "fn": 0,
-      "fp": 0,
+      "fp": 1,
       "recall": 100,
-      "precision": 100
+      "precision": 83.3
     },
     {
       "class": "assert-removed",
-      "tp": 2,
+      "tp": 4,
       "fn": 0,
       "fp": 0,
       "recall": 100,
@@ -54,15 +54,15 @@
     },
     {
       "class": "test-deleted",
-      "tp": 2,
+      "tp": 4,
       "fn": 0,
-      "fp": 1,
+      "fp": 0,
       "recall": 100,
-      "precision": 66.7
+      "precision": 100
     },
     {
       "class": "threshold-lowered",
-      "tp": 2,
+      "tp": 4,
       "fn": 0,
       "fp": 0,
       "recall": 100,
@@ -71,11 +71,11 @@
   ],
   "failures": [
     {
-      "id": "clean-08",
+      "id": "skip-06",
       "kind": "false-alarm",
-      "class": "test-deleted",
-      "file": "src/middleware/serve-static/index.test.ts",
-      "text": "it('Should decode URI strings - /static/%E7%82%8E.txt', async () => {"
+      "class": "lint-suppress",
+      "file": "tests/test_staticfiles.py",
+      "text": "pass  # pragma: no cover - The connection is rejected before entering the context."
     }
   ]
 }

@@ -39,8 +39,8 @@ scope:
 | `only` | added `.only`, `fit`, `fdescribe` |
 | `type-suppress` | added `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `# type: ignore` |
 | `lint-suppress` | added `eslint-disable*`, `biome-ignore`, `# noqa`, `pylint: disable`, coverage and security exclusions (`istanbul ignore`, `pragma: no cover`, `nosec`) |
-| `assert-removed` | assertion lines removed from a test file without a replacement |
-| `test-deleted` | a test case or test file removed; renames and moves do not count |
+| `assert-removed` | assertions removed from a test that the same test does not make up for (rewrites, moves and folds into parameter rows do not count) |
+| `test-deleted` | a test case or test file removed; renames, moves and folds into a parameterised test with enough rows do not count |
 | `threshold-lowered` | coverage minimums lowered or lint maximums raised in `package.json`, jest/vitest config, `pyproject.toml`, `.coveragerc`, `setup.cfg` |
 | `out-of-scope` | changed file outside the declared scope |
 
@@ -48,29 +48,37 @@ Mentions inside strings and ordinary comments are not findings. Raising a thresh
 
 ## Results
 
-The benchmark lives in [`bench/`](bench/): 70 real commit diffs from 22 public MIT, Apache-2.0 and BSD repositories. 24 diffs are left clean, including tricky ones (renamed tests, raised thresholds, "skip" in test titles, rewritten assertions). 46 diffs carry exactly one planted defect. 20 cases are a held-out set, fixed before any tuning of the detector. The dataset was built by a separate agent that never saw the detector code. Run it with `bun bench/run.ts --set all|dev|heldout`.
+The benchmark lives in [`bench/`](bench/): 170 real commit diffs from 50 public MIT, Apache-2.0 and BSD repositories, in four sets. Clean diffs are left as upstream wrote them; planted diffs carry exactly one injected defect. Every set was built by a separate AI agent that never saw the detector code, and each held-out set was committed before the detector first ran on it. Run it with `bun bench/run.ts --set dev|heldout|heldout2|heldout3|all`.
 
-Detector 0.2.3, dataset 92c7e936958a ([results/](results/)).
+Detector 0.4.0, dataset b7feccc36acb ([results/](results/)).
 
-| set | cases | recall | precision | clean diffs flagged |
-|---|---|---|---|---|
-| dev | 50 | 100 % | 96.9 % | 0/19 |
-| held-out | 20 | 100 % | 93.8 % | 1/5 |
-| all | 70 | 100 % | 95.8 % | 1/24 |
+| set | role | cases | defects found (planted + real) | clean diffs flagged | precision |
+|---|---|---|---|---|---|
+| heldout3 | **test set**, measured once | 56 | 26/27 | 1/29 | 81.3 % |
+| heldout2 | tuning (consumed) | 44 | 27/27 | 0/17 | 100 % |
+| heldout | tuning (consumed) | 20 | 15/15 | 0/5 | 100 % |
+| dev | tuning | 50 | 31/31 | 0/19 | 96.9 % |
 
-| class | found (all) | false alarms (all) | found (held-out) |
-|---|---|---|---|
-| `skip` | 8/8 | 0 | 3/3 |
-| `only` | 6/6 | 0 | 2/2 |
-| `type-suppress` | 7/7 | 0 | 2/2 |
-| `lint-suppress` | 7/7 | 1 | 2/2 |
-| `assert-removed` | 6/6 | 0 | 2/2 |
-| `test-deleted` | 6/6 | 1 | 2/2 |
-| `threshold-lowered` | 6/6 | 0 | 2/2 |
+**The number to trust is heldout3.** Its clean diffs were chosen by a mechanical rule (the newest commits that touch a test file, taken in order), not hand-picked, so its false-alarm rate is closest to what a real repository sees. It also contains four upstream commits that genuinely add a suppression or skip.
 
-**False alarms.** `skip-06`: an upstream commit added `pass  # pragma: no cover`; the gate counts coverage exclusions as `lint-suppress` by design, the dataset labels the line clean. `clean-08` (held-out): a test is rewritten into `it.each([...])(...)`, a form the gate does not recognise as a test definition, so the old test reads as deleted. Both stay counted; the held-out case is not tuned away.
+| class (heldout3) | found | false alarms |
+|---|---|---|
+| `skip` | 5/5 | 0 |
+| `only` | 3/3 | 0 |
+| `type-suppress` | 3/3 | 0 |
+| `lint-suppress` | 6/6 | 4 |
+| `assert-removed` | 3/4 | 2 |
+| `test-deleted` | 3/3 | 0 |
+| `threshold-lowered` | 3/3 | 0 |
 
-**Read these numbers with care.** The first version (detector 0.1.0) missed most removed assertions, because it forgave a removal whenever any new assertion appeared in the same file. A review caught it; the fix was tuned on the dev set only, and the held-out set was committed before that fix. A later review fix (deleted tests offset only by a test added in the same change block) introduced the clean-08 false alarm on held-out, which is reported rather than tuned. Held-out is 20 cases: no misses on 15 planted defects, one false alarm on 5 clean diffs. The dataset and the detector were written by separate AI agents of the same model family, neither with access to the other's work.
+**What went wrong on the way, and stayed in the record.**
+
+- Detector 0.1.0 missed most removed assertions: it forgave a removal whenever any new assertion appeared in the same file. Review caught it.
+- The first held-out set (5 clean diffs) was too small. After it showed one false alarm, it was inspected, so it no longer counts as held out.
+- On heldout2, detector 0.3.0 flagged several clean diffs (no result file kept): real refactors (several Python tests folded into one `parametrize`, tests moved or restructured) read as deleted tests. That set had a bias of its own, as its clean cases were picked to favour refactors.
+- Detector 0.4.0 redesigned `test-deleted` and `assert-removed` as test accounting (parameter rows, folds, assertion ownership), tuned on dev, heldout and heldout2, then ran once on heldout3.
+
+**Remaining false alarms on heldout3.** `h3-clean-24` adds `# pragma: no cover`: the gate counts coverage exclusions as `lint-suppress` by design (same as `skip-06` in dev). The other false alarms sit in rows that already carry a defect: a second `eslint-disable` beyond the labelled one, an `oxlint-disable` added by the upstream commit itself, and two rewritten assertions in an upstream refactor. One planted assertion removal was missed (`h3-assertrm-04`).
 
 ## What the gate does not catch
 
@@ -78,7 +86,10 @@ Detector 0.2.3, dataset 92c7e936958a ([results/](results/)).
 - **Rules switched off in config.** `"no-explicit-any": "off"` in an eslint config, codecov `target:`, eslint `complexity: ["error", N]`.
 - **Test files outside the naming conventions**, for example `e2e/login.ts` without `.test`, `.spec` or a `tests/` directory.
 - **Intent.** The gate sees the diff, not whether the change was right. It narrows what a reviewer has to check; it does not replace the review.
-- **Parameterised tests.** A test rewritten into `it.each([...])(...)` or `test.each` reads as a deleted test.
+- **Folds are credited by row count, not by content.** A removed test is absorbed by any parameterised test in the same file that has spare rows (`parametrize` lists, fixture `params=`, `it.each`/`test.each` tables). Deleting one test while adding an unrelated parameterised test with enough rows passes.
+- **Parameter rows the gate cannot count.** A `parametrize` or `.each` over a variable or comprehension counts as one row, `describe.each` and class-level `parametrize`/`pytestmark` are not counted, so a fold into those still reads as a deletion. Rows removed from an existing parameter list are not reported.
+- **Assertions moved between tests.** An assertion moved to another test with edits reads as removed; an identical one does not. Ownership comes from indentation inside the hunk and git's hunk header, so a hunk that starts deep inside a long test can attribute lines to the wrong test.
+- **Test files in other languages.** Only TS/JS and Python test files are accounted; deleting, say, a Go or Ruby test file is not reported.
 - **File-level exceptions.** A deleted test file or an out-of-scope file cannot carry a `gate-allow` comment.
 
 ## Development

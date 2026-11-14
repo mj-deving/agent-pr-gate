@@ -1,0 +1,122 @@
+{
+  "date": "2026-11-14",
+  "set": "heldout3",
+  "detectorVersion": "0.4.0",
+  "datasetVersion": "b7feccc36acb",
+  "cases": 56,
+  "overall": {
+    "recall": 96.3,
+    "precision": 81.3
+  },
+  "cleanFalseAlarmRate": 3.4,
+  "cleanFlagged": 1,
+  "cleanTotal": 29,
+  "perClass": [
+    {
+      "class": "skip",
+      "tp": 5,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "only",
+      "tp": 3,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "type-suppress",
+      "tp": 3,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "lint-suppress",
+      "tp": 6,
+      "fn": 0,
+      "fp": 4,
+      "recall": 100,
+      "precision": 60
+    },
+    {
+      "class": "assert-removed",
+      "tp": 3,
+      "fn": 1,
+      "fp": 2,
+      "recall": 75,
+      "precision": 60
+    },
+    {
+      "class": "test-deleted",
+      "tp": 3,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "threshold-lowered",
+      "tp": 3,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    }
+  ],
+  "failures": [
+    {
+      "id": "h3-real-02",
+      "kind": "false-alarm",
+      "class": "assert-removed",
+      "file": "test/request-construction.ts",
+      "text": "t.is(input.method, 'query');"
+    },
+    {
+      "id": "h3-real-02",
+      "kind": "false-alarm",
+      "class": "assert-removed",
+      "file": "test/resilience.ts",
+      "text": "t.is(transport.attempts, 2);"
+    },
+    {
+      "id": "h3-real-03",
+      "kind": "false-alarm",
+      "class": "lint-suppress",
+      "file": "test/retry.ts",
+      "text": "// eslint-disable-next-line no-await-in-loop"
+    },
+    {
+      "id": "h3-clean-24",
+      "kind": "false-alarm",
+      "class": "lint-suppress",
+      "file": "tests/protocols/test_websocket.py",
+      "text": "return None  # pragma: no cover"
+    },
+    {
+      "id": "h3-clean-24",
+      "kind": "false-alarm",
+      "class": "lint-suppress",
+      "file": "tests/protocols/test_websocket.py",
+      "text": "if websockets_version < \"17.0\":  # pragma: no cover"
+    },
+    {
+      "id": "h3-only-03",
+      "kind": "false-alarm",
+      "class": "lint-suppress",
+      "file": "packages/create-vite/src/index.ts",
+      "text": "// oxlint-disable-next-line typescript/require-array-sort-compare"
+    },
+    {
+      "id": "h3-assertrm-04",
+      "kind": "missed",
+      "class": "assert-removed",
+      "file": "tests/test_web_urldispatcher.py"
+    }
+  ]
+}

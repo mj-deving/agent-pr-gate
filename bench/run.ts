@@ -7,7 +7,7 @@ import { DETECTOR_VERSION, detect, type DefectClass } from "../src/detect.ts";
 
 interface Case {
   id: string;
-  set: "dev" | "heldout";
+  set: "dev" | "heldout" | "heldout2" | "heldout3";
   planted: boolean;
   expected: { class: DefectClass; file: string }[];
   also_acceptable?: DefectClass[];
@@ -20,7 +20,7 @@ const CLASSES: DefectClass[] = [
 const root = join(import.meta.dir, "..");
 const setArg = process.argv.indexOf("--set");
 const set = setArg >= 0 ? process.argv[setArg + 1] : "all";
-if (!["dev", "heldout", "all"].includes(set ?? "")) throw new Error(`--set must be dev, heldout or all, got ${set}`);
+if (!["dev", "heldout", "heldout2", "heldout3", "all"].includes(set ?? "")) throw new Error(`--set must be dev, heldout, heldout2, heldout3 or all, got ${set}`);
 
 const manifestText = readFileSync(join(root, "bench/manifest.jsonl"), "utf8");
 const datasetVersion = createHash("sha256").update(manifestText).digest("hex").slice(0, 12);
@@ -55,7 +55,7 @@ for (const c of cases) {
     extra++;
     failures.push({ id: c.id, kind: "false-alarm", class: f.class, file: f.file, text: f.text.trim().slice(0, 120) });
   });
-  if (!c.planted) {
+  if (c.expected.length === 0) {
     cleanTotal++;
     if (extra > 0) cleanFlagged++;
   }

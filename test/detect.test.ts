@@ -364,3 +364,231 @@ describe("test-deleted locality", () => {
     expect(detect(diff).map((f) => f.class)).toContain("test-deleted");
   });
 });
+
+describe("parameterised tests", () => {
+  const classes = (lines: string[]) => detect(fileDiff("test/add.test.ts", lines)).map((x) => x.class);
+  test("rewrite into a one-line it.each is not test-deleted", () => {
+    expect(classes(["-it('adds one', () => { expect(add(1)).toBe(2); });", "+it.each([[1, 2]])('adds %i', (a, b) => { expect(add(a)).toBe(b); });"])).toEqual([]);
+  });
+  test("rewrite into a multi-line it.each table is not test-deleted", () => {
+    expect(classes(["-it('adds one', () => {", "-  expect(add(1)).toBe(2);", "-});", "+it.each([", "+  [1, 2],", "+])('adds %i', (a, b) => {", "+  expect(add(a)).toBe(b);", "+});"])).toEqual([]);
+  });
+  test("rewrite into a test.each tagged template is not test-deleted", () => {
+    expect(classes(["-test('adds one', () => {", "-  expect(add(1)).toBe(2);", "-});", "+test.each`", "+  a | b", "+  ${1} | ${2}", "+`('adds $a', ({ a, b }) => {", "+  expect(add(a)).toBe(b);", "+});"])).toEqual([]);
+  });
+  test("an it.each title with nothing removed is no finding", () => {
+    expect(classes(["+it.each([[1, 2]])('adds %i', (a, b) => { expect(add(a)).toBe(b); });"])).toEqual([]);
+  });
+});
+
+describe("test accounting", () => {
+  const py = (lines: string[]) => detect(fileDiff("tests/test_a.py", lines)).map((x) => x.class);
+  const js = (lines: string[]) => detect(fileDiff("test/a.test.ts", lines)).map((x) => x.class);
+  const twoHunks = (path: string, first: string[], second: string[], context = ["", ""]) =>
+    [
+      `diff --git a/${path} b/${path}`,
+      `--- a/${path}`,
+      `+++ b/${path}`,
+      `@@ -1,${first.filter((l) => !l.startsWith("+")).length} +1,${first.filter((l) => !l.startsWith("-")).length} @@ ${context[0]}`,
+      ...first,
+      `@@ -100,${second.filter((l) => !l.startsWith("+")).length} +100,${second.filter((l) => !l.startsWith("-")).length} @@ ${context[1]}`,
+      ...second,
+      "",
+    ].join("\n");
+
+  describe("folding tests into a parameterised test", () => {
+    const folded = (rows: string[]) =>
+      twoHunks(
+        "tests/test_a.py",
+        [
+          "-def test_parse_int():",
+          "-    assert parse('1') == 1",
+          "+@pytest.mark.parametrize('text, value', [",
+          ...rows,
+          "+])",
+          "+def test_parse(text, value):",
+          "+    assert parse(text) == value",
+        ],
+        ["-def test_parse_float():", "-    assert parse('1.5') == 1.5", " ", "-def test_parse_neg():", "-    assert parse('-1') == -1"],
+      );
+    test("three tests folded into three rows is no finding", () => {
+      expect(detect(folded(["+    ('1', 1),", "+    ('1.5', 1.5),", "+    pytest.param('-1', -1, id='neg'),"]))).toEqual([]);
+    });
+    test("three tests folded into two rows leaves one test-deleted", () => {
+      expect(detect(folded(["+    ('1', 1),", "+    ('1.5', 1.5),"])).map((x) => x.class)).toEqual(["test-deleted"]);
+    });
+    test("stacked parametrize decorators multiply", () => {
+      const diff = twoHunks(
+        "tests/test_a.py",
+        ["-def test_a():", "-    run()", "+@pytest.mark.parametrize('x', [1, 2])", "+@pytest.mark.parametrize('y', argvalues=(3, 4))", "+def test_xy(x, y):", "+    run(x, y)"],
+        ["-def test_b():", "-    run()", " ", "-def test_c():", "-    run()", " ", "-def test_d():", "-    run()"],
+      );
+      expect(detect(diff)).toEqual([]);
+    });
+    test("a parametrize over a name cannot be counted and absorbs nothing extra", () => {
+      const diff = twoHunks(
+        "tests/test_a.py",
+        ["-def test_a():", "-    run()", "+@pytest.mark.parametrize('x', CASES)", "+def test_x(x):", "+    run(x)"],
+        ["-def test_b():", "-    run()"],
+      );
+      expect(detect(diff).map((x) => x.class)).toEqual(["test-deleted"]);
+    });
+    test("fixture params multiply every test that takes the fixture", () => {
+      const diff = twoHunks(
+        "tests/test_a.py",
+        [
+          "+@pytest.fixture(params=['explicit', 'decorator'])",
+          "+def mode(request):",
+          "+    return request.param",
+          " ",
+          "-def test_run_explicit():",
+          "-    run('explicit')",
+          "-def test_run_decorator():",
+          "-    run('decorator')",
+          "+def test_run(mode):",
+          "+    run(mode)",
+        ],
+        [" # end"],
+      );
+      expect(detect(diff)).toEqual([]);
+    });
+    test("rows added to a surviving parametrized test absorb a removed test", () => {
+      const diff = twoHunks(
+        "tests/test_a.py",
+        [" @pytest.mark.parametrize('n', [", "     1,", "+    2,", " ])", " def test_n(n):", "     run(n)"],
+        ["-def test_two():", "-    run(2)"],
+      );
+      expect(detect(diff)).toEqual([]);
+    });
+    test("test.each over three titles replaces a test and absorbs two more", () => {
+      expect(
+        js([
+          "-test('block', () => {",
+          "-  expect(run('block')).toBe(1)",
+          "-})",
+          "-test('full', () => {",
+          "-  expect(run('full')).toBe(1)",
+          "-})",
+          " ",
+          "-test('none', () => {",
+          "-  expect(run('none')).toBe(1)",
+          "-})",
+          "+test.each(['block', 'full', 'none'])(",
+          "+  'runs in %s mode',",
+          "+  async mode => {",
+          "+    expect(run(mode)).toBe(1)",
+          "+  },",
+          "+)",
+        ]),
+      ).toEqual([]);
+    });
+    test("a test.each tagged template counts its rows below the header", () => {
+      expect(
+        js([
+          "-test('one', () => { expect(add(1)).toBe(2) })",
+          "-test('two', () => { expect(add(2)).toBe(3) })",
+          "+test.each`",
+          "+  a    | b",
+          "+  ${1} | ${2}",
+          "+  ${2} | ${3}",
+          "+`('adds $a', ({ a, b }) => {",
+          "+  expect(add(a)).toBe(b)",
+          "+})",
+        ]),
+      ).toEqual([]);
+    });
+  });
+
+  describe("quiet deletions stay findings", () => {
+    test("deleting a test while adding an unrelated parameterless test in another hunk", () => {
+      const diff = twoHunks("tests/test_a.py", ["-def test_rejects_negative():", "-    assert check(-1) is False"], ["+def test_smoke():", "+    assert check"]);
+      expect(detect(diff).map((x) => x.class)).toEqual(["test-deleted"]);
+    });
+    test("deleting a test in another file does not use this file's parametrized rows", () => {
+      const diff =
+        fileDiff("tests/test_a.py", ["+@pytest.mark.parametrize('x', [1, 2, 3])", "+def test_x(x):", "+    run(x)"]) +
+        fileDiff("tests/test_b.py", ["-def test_y():", "-    run()"]);
+      expect(detect(diff).map((x) => `${x.class} ${x.file}`)).toEqual(["test-deleted tests/test_b.py"]);
+    });
+    test("a regex .test( call is not a test head", () => {
+      expect(js(["-  const ok = /x/.test('a')", "+  const ok = true"])).toEqual([]);
+      expect(js(["-function test(a) {", "-  return a", "-}"])).toEqual([]);
+    });
+  });
+
+  describe("assertions belong to their test", () => {
+    test("an assertion removed from a kept test is not offset by a new test in the same change block", () => {
+      const diff = fileDiff(
+        "tests/test_info.py",
+        ["     assert eq is False", "-    assert load() == {'a': 1}", "+", "+def test_new(tmp_path):", "+    assert load() == {}"],
+        {},
+      ).replace("@@ -1,2 +1,4 @@", "@@ -38,2 +38,4 @@ def test_self_heals(tmp_path: Path) -> None:");
+      expect(detect(diff).map((x) => x.class)).toEqual(["assert-removed"]);
+    });
+    test("the same shape in JS: a new it() below does not offset", () => {
+      expect(
+        js([" it('heals', () => {", "   run()", "-  expect(load()).toEqual({ a: 1 })", " })", "+it('new', () => {", "+  expect(load()).toEqual({})", "+})"]),
+      ).toEqual(["assert-removed"]);
+    });
+    test("assertions rewritten across change blocks of one test are no finding", () => {
+      expect(
+        py([
+          " def test_close():",
+          "-    got = []",
+          "+    class NS:",
+          "+        got = False",
+          "     run()",
+          "-    assert len(got) == 1",
+          "-    assert len(more) == 1",
+          "+    assert NS.got",
+          "     cleanup()",
+          "+    assert NS.more",
+        ]),
+      ).toEqual([]);
+    });
+    test("fewer assertions in the same test is the surplus", () => {
+      expect(py([" def test_close():", "-    assert a == 1", "     run()", "-    assert b == 2", "+    assert a"])).toEqual(["assert-removed"]);
+    });
+    test("assertions folded into new parametrize rows of the same test", () => {
+      const lines = (rows: string[]) => [
+        "+@pytest.mark.parametrize('x, y', [",
+        ...rows,
+        "+])",
+        "-def test_add():",
+        "+def test_add(x, y):",
+        "-    assert add(1) == 2",
+        "-    assert add(2) == 3",
+        "-    assert add(3) == 4",
+        "+    assert add(x) == y",
+      ];
+      expect(py(lines(["+    (1, 2),", "+    (2, 3),", "+    (3, 4),"]))).toEqual([]);
+      expect(py(lines(["+    (1, 2),", "+    (2, 3),"]))).toEqual(["assert-removed"]);
+    });
+    test("a renamed test keeps its assertions on the books", () => {
+      expect(py(["-def test_old():", "+def test_new():", "     x = run()", "-    assert x == 1", "-    assert y == 2", "+    assert x == 1.0"])).toEqual(["assert-removed"]);
+    });
+    test("assertions of a deleted test are reported once, as the deleted test", () => {
+      expect(py(["-def test_gone():", "-    assert a == 1", "-    assert b == 2"])).toEqual(["test-deleted"]);
+    });
+    test("the hunk header names the owning test when the def line is above the hunk", () => {
+      const diff = twoHunks(
+        "tests/test_a.py",
+        ["-    assert a == 1", "     run()"],
+        ["     run()", "+    assert a == 1.0"],
+        ["def test_one():", "def test_one():"],
+      );
+      expect(detect(diff)).toEqual([]);
+      const other = twoHunks("tests/test_a.py", ["-    assert a == 1", "     run()"], ["     run()", "+    assert a == 1.0"], ["def test_one():", "def test_two():"]);
+      expect(detect(other).map((x) => x.class)).toEqual(["assert-removed"]);
+    });
+  });
+
+  describe("test heads", () => {
+    test("a title on the line after test( is read, so a retitle in place is a rename", () => {
+      expect(js(["-test(", "-  'old title',", "+test(", "+  'new title',", "   () => {", "     expect(run()).toBe(1)", "   },", " )"])).toEqual([]);
+    });
+    test("test.describe and test.beforeEach are not tests", () => {
+      expect(js(["-test.describe('suite', () => {", "+describe('suite', () => {", "-test.beforeEach(() => {})"])).toEqual([]);
+    });
+  });
+});

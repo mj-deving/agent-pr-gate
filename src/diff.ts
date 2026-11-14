@@ -13,6 +13,8 @@ export interface DiffLine {
 
 export interface Hunk {
   lines: DiffLine[];
+  /** Text after the closing `@@` of the hunk header: git's guess at the enclosing function, often empty. */
+  context: string;
 }
 
 export interface FileDiff {
@@ -85,7 +87,7 @@ export function parseDiff(diff: string): FileDiff[] {
       oldLeft = header[2] === undefined ? 1 : Number(header[2]);
       newNo = Number(header[3]);
       newLeft = header[4] === undefined ? 1 : Number(header[4]);
-      hunk = { lines: [] };
+      hunk = { lines: [], context: line.slice(header[0].length).trim() };
       file.hunks.push(hunk);
       continue;
     }

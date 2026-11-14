@@ -1,0 +1,129 @@
+{
+  "date": "2026-11-14",
+  "set": "all",
+  "detectorVersion": "0.4.0",
+  "datasetVersion": "b7feccc36acb",
+  "cases": 170,
+  "overall": {
+    "recall": 99,
+    "precision": 93.4
+  },
+  "cleanFalseAlarmRate": 1.4,
+  "cleanFlagged": 1,
+  "cleanTotal": 70,
+  "perClass": [
+    {
+      "class": "skip",
+      "tp": 17,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "only",
+      "tp": 12,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "type-suppress",
+      "tp": 14,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "lint-suppress",
+      "tp": 17,
+      "fn": 0,
+      "fp": 5,
+      "recall": 100,
+      "precision": 77.3
+    },
+    {
+      "class": "assert-removed",
+      "tp": 13,
+      "fn": 1,
+      "fp": 2,
+      "recall": 92.9,
+      "precision": 86.7
+    },
+    {
+      "class": "test-deleted",
+      "tp": 13,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    },
+    {
+      "class": "threshold-lowered",
+      "tp": 13,
+      "fn": 0,
+      "fp": 0,
+      "recall": 100,
+      "precision": 100
+    }
+  ],
+  "failures": [
+    {
+      "id": "skip-06",
+      "kind": "false-alarm",
+      "class": "lint-suppress",
+      "file": "tests/test_staticfiles.py",
+      "text": "pass  # pragma: no cover - The connection is rejected before entering the context."
+    },
+    {
+      "id": "h3-real-02",
+      "kind": "false-alarm",
+      "class": "assert-removed",
+      "file": "test/request-construction.ts",
+      "text": "t.is(input.method, 'query');"
+    },
+    {
+      "id": "h3-real-02",
+      "kind": "false-alarm",
+      "class": "assert-removed",
+      "file": "test/resilience.ts",
+      "text": "t.is(transport.attempts, 2);"
+    },
+    {
+      "id": "h3-real-03",
+      "kind": "false-alarm",
+      "class": "lint-suppress",
+      "file": "test/retry.ts",
+      "text": "// eslint-disable-next-line no-await-in-loop"
+    },
+    {
+      "id": "h3-clean-24",
+      "kind": "false-alarm",
+      "class": "lint-suppress",
+      "file": "tests/protocols/test_websocket.py",
+      "text": "return None  # pragma: no cover"
+    },
+    {
+      "id": "h3-clean-24",
+      "kind": "false-alarm",
+      "class": "lint-suppress",
+      "file": "tests/protocols/test_websocket.py",
+      "text": "if websockets_version < \"17.0\":  # pragma: no cover"
+    },
+    {
+      "id": "h3-only-03",
+      "kind": "false-alarm",
+      "class": "lint-suppress",
+      "file": "packages/create-vite/src/index.ts",
+      "text": "// oxlint-disable-next-line typescript/require-array-sort-compare"
+    },
+    {
+      "id": "h3-assertrm-04",
+      "kind": "missed",
+      "class": "assert-removed",
+      "file": "tests/test_web_urldispatcher.py"
+    }
+  ]
+}
