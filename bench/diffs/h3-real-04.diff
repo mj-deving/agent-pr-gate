@@ -1,0 +1,143 @@
+diff --git a/pydantic_settings/sources/providers/secrets.py b/pydantic_settings/sources/providers/secrets.py
+index 38700ae3..4ce67ccd 100644
+--- a/pydantic_settings/sources/providers/secrets.py
++++ b/pydantic_settings/sources/providers/secrets.py
+@@ -80,6 +80,9 @@ def __call__(self) -> dict[str, Any]:
+             if not path.is_dir():
+                 raise SettingsError(f'secrets_dir must reference a directory, not a {path_type_label(path)}')
+ 
++        # resolved once here, used to check that every secret file stays inside its directory
++        self._resolved_secrets_paths = {path: path.resolve() for path in self.secrets_paths}
++
+         return super().__call__()
+ 
+     @classmethod
+@@ -125,9 +128,25 @@ def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str,
+                         logger.debug('Secret file not found, skipping: %s', (secrets_path / env_name).resolve())
+                     continue
+ 
++                try:
++                    resolved_path = path.resolve()
++                except (OSError, RuntimeError) as e:
++                    # e.g. a symlink loop, which raises `RuntimeError` on Python < 3.13
++                    warnings.warn(
++                        f'attempted to load secret file "{path}" but it could not be resolved: {e}',
++                        stacklevel=4,
++                    )
++                    continue
++
+                 if path.is_file():
++                    if self._resolved_secrets_paths[secrets_path] not in resolved_path.parents:
++                        warnings.warn(
++                            f'attempted to load secret file "{path}" but it resolves outside of "{secrets_path}".',
++                            stacklevel=4,
++                        )
++                        continue
+                     if debug:
+-                        logger.debug('Loading secret file: %s', path.resolve())
++                        logger.debug('Loading secret file: %s', resolved_path)
+                     # Explicit encoding: `read_text()` would otherwise decode with the
+                     # locale encoding, so a UTF-8 secret is corrupted on a non-UTF-8
+                     # Windows code page (silently, when every byte happens to map).
+diff --git a/tests/test_settings.py b/tests/test_settings.py
+index 592bf0c0..cd5a3fd2 100644
+--- a/tests/test_settings.py
++++ b/tests/test_settings.py
+@@ -3571,6 +3571,97 @@ class Settings(BaseSettings):
+     assert conf.foo == 'secret_value'  # value obtained from first directory
+ 
+ 
++def test_secrets_symlink_file_escaping_secrets_dir_is_ignored(tmp_path):
++    secrets_dir = tmp_path / 'secrets'
++    secrets_dir.mkdir()
++    outside = tmp_path / 'outside'
++    outside.mkdir()
++    outside.joinpath('passwd').write_text('outside-value')
++
++    link = secrets_dir / 'passwd'
++    try:
++        link.symlink_to(outside / 'passwd')
++    except OSError:
++        pytest.skip('symlinks not supported on this platform')
++
++    class Settings(BaseSettings):
++        model_config = SettingsConfigDict(secrets_dir=secrets_dir)
++
++        passwd: str | None = None
++
++    with pytest.warns(UserWarning, match='attempted to load secret file .* but it resolves outside of'):
++        assert Settings().model_dump() == {'passwd': None}
++
++
++def test_secrets_in_tree_symlink_is_followed(tmp_path):
++    secrets_dir = tmp_path / 'secrets'
++    secrets_dir.mkdir()
++    data_dir = secrets_dir / '..data'
++    data_dir.mkdir()
++    (data_dir / 'passwd').write_text('in-tree-value')
++
++    link = secrets_dir / 'passwd'
++    try:
++        link.symlink_to(data_dir / 'passwd')
++    except OSError:
++        pytest.skip('symlinks not supported on this platform')
++
++    class Settings(BaseSettings):
++        model_config = SettingsConfigDict(secrets_dir=secrets_dir)
++
++        passwd: str | None = None
++
++    assert Settings().model_dump() == {'passwd': 'in-tree-value'}
++
++
++def test_secrets_escaping_symlink_mocked_is_ignored(tmp_path, monkeypatch):
++    secrets_dir = tmp_path / 'secrets'
++    secrets_dir.mkdir()
++    file_path = secrets_dir / 'passwd'
++    file_path.write_text('outside-value')
++    outside_path = tmp_path / 'outside' / 'passwd'
++
++    orig_resolve = Path.resolve
++
++    def mock_resolve(self, *args, **kwargs):
++        if self == file_path:
++            return outside_path
++        return orig_resolve(self, *args, **kwargs)
++
++    monkeypatch.setattr(Path, 'resolve', mock_resolve)
++
++    class Settings(BaseSettings):
++        model_config = SettingsConfigDict(secrets_dir=secrets_dir)
++
++        passwd: str | None = None
++
++    with pytest.warns(UserWarning, match='attempted to load secret file .* but it resolves outside of'):
++        assert Settings().model_dump() == {'passwd': None}
++
++
++def test_secrets_resolve_error_is_skipped(tmp_path, monkeypatch):
++    secrets_dir = tmp_path / 'secrets'
++    secrets_dir.mkdir()
++    file_path = secrets_dir / 'passwd'
++    file_path.write_text('val')
++
++    orig_resolve = Path.resolve
++
++    def mock_resolve(self, *args, **kwargs):
++        if self == file_path:
++            raise OSError('mocked resolve error')
++        return orig_resolve(self, *args, **kwargs)
++
++    monkeypatch.setattr(Path, 'resolve', mock_resolve)
++
++    class Settings(BaseSettings):
++        model_config = SettingsConfigDict(secrets_dir=secrets_dir)
++        passwd: str | None = None
++
++    with pytest.warns(UserWarning, match='attempted to load secret file .* but it could not be resolved'):
++        assert Settings().passwd is None
++
++
+ def test_secrets_dotenv_precedence(tmp_path):
+     s = tmp_path / 'foo'
+     s.write_text('foo_secret_value_str')

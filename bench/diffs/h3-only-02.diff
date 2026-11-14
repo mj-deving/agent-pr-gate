@@ -1,0 +1,61 @@
+diff --git a/source/core/Ky.ts b/source/core/Ky.ts
+index 4e8a2f38..4bfd70c9 100644
+--- a/source/core/Ky.ts
++++ b/source/core/Ky.ts
+@@ -101,7 +101,7 @@ const validateTimeoutOption = (value: unknown, name: 'timeout' | 'totalTimeout')
+ // These callbacks are called directly, so a non-function value otherwise surfaces as a runtime error naming Ky's
+ // own internals rather than the option the caller set.
+ const validateCallbackOptions = (options: Record<string, unknown>): void => {
+-	for (const key of ['parseJson', 'stringifyJson', 'fetch'] as const) {
++	for (const key of ['parseJson', 'stringifyJson', 'fetch', 'onDownloadProgress'] as const) {
+ 		if (options[key] !== undefined && typeof options[key] !== 'function') {
+ 			throw new TypeError(`The \`${key}\` option must be a function`);
+ 		}
+@@ -362,10 +362,6 @@ export class Ky {
+ 
+ 			// If `onDownloadProgress` is passed, it uses the stream API internally
+ 			if (ky.#options.onDownloadProgress) {
+-				if (typeof ky.#options.onDownloadProgress !== 'function') {
+-					throw new TypeError('The `onDownloadProgress` option must be a function');
+-				}
+-
+ 				if (!supportsResponseStreams) {
+ 					throw new Error('Streams are not supported in your environment. `ReadableStream` is missing.');
+ 				}
+diff --git a/test/validation.ts b/test/validation.ts
+index 0d2f2195..9b6128e5 100644
+--- a/test/validation.ts
++++ b/test/validation.ts
+@@ -145,3 +145,32 @@ test('a nullish or non-string `input` reports the input error', t => {
+ 		}, `input: ${String(input)}`);
+ 	}
+ });
++
++// `onDownloadProgress` was type-checked at the very end of the pipeline, so an invalid value ran the whole request
++// and only then reported the typo, leaving the response body with nobody able to release it.
++test.only('rejects a non-function `onDownloadProgress` before the request is sent', t => {
++	let fetchCalled = false;
++	let beforeRequestCalls = 0;
++
++	t.throws(() => {
++		void ky('https://example.com', {
++			onDownloadProgress: 'x' as never,
++			retry: 0,
++			hooks: {
++				beforeRequest: [() => {
++					beforeRequestCalls++;
++				}],
++			},
++			async fetch() {
++				fetchCalled = true;
++				return new Response('ok');
++			},
++		});
++	}, {
++		name: 'TypeError',
++		message: 'The `onDownloadProgress` option must be a function',
++	});
++
++	t.false(fetchCalled);
++	t.is(beforeRequestCalls, 0);
++});

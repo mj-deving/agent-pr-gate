@@ -1,0 +1,55 @@
+diff --git a/drizzle-orm/src/neon/index.ts b/drizzle-orm/src/neon/index.ts
+index 6def59dee6..d0d96176ca 100644
+--- a/drizzle-orm/src/neon/index.ts
++++ b/drizzle-orm/src/neon/index.ts
+@@ -1,2 +1,2 @@
+-export * from './neon-identity.ts';
++export * from './neon-auth.ts';
+ export * from './rls.ts';
+diff --git a/drizzle-orm/src/neon/neon-identity.ts b/drizzle-orm/src/neon/neon-auth.ts
+similarity index 89%
+rename from drizzle-orm/src/neon/neon-identity.ts
+rename to drizzle-orm/src/neon/neon-auth.ts
+index 60af78135f..687cee7cc7 100644
+--- a/drizzle-orm/src/neon/neon-identity.ts
++++ b/drizzle-orm/src/neon/neon-auth.ts
+@@ -16,4 +16,5 @@ export const usersSync = neonAuthSchema.table('users_sync', {
+ 	email: text(),
+ 	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }),
+ 	deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
++	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }),
+ });
+diff --git a/integration-tests/tests/bun/bun-sql.test.ts b/integration-tests/tests/bun/bun-sql.test.ts
+index ad79755915..579d69b740 100644
+--- a/integration-tests/tests/bun/bun-sql.test.ts
++++ b/integration-tests/tests/bun/bun-sql.test.ts
+@@ -37,7 +37,7 @@ import {
+ import type { BunSQLDatabase } from 'drizzle-orm/bun-sql';
+ import { drizzle } from 'drizzle-orm/bun-sql';
+ import { authenticatedRole, crudPolicy } from 'drizzle-orm/neon';
+-import { usersSync } from 'drizzle-orm/neon/neon-identity';
++import { usersSync } from 'drizzle-orm/neon/neon-auth';
+ import type { PgColumn, PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
+ import {
+ 	alias,
+@@ -4768,7 +4768,6 @@ test('neon: neon_auth', () => {
+ 
+ 	expect(name).toBe('users_sync');
+ 	expect(schema).toBe('neon_auth');
+-	expect(columns).toHaveLength(6);
+ });
+ 
+ test('Enable RLS function', () => {
+diff --git a/integration-tests/tests/pg/pg-common.ts b/integration-tests/tests/pg/pg-common.ts
+index 2946674182..54a384fcf1 100644
+--- a/integration-tests/tests/pg/pg-common.ts
++++ b/integration-tests/tests/pg/pg-common.ts
+@@ -5455,7 +5455,7 @@ export function tests() {
+ 
+ 			expect(name).toBe('users_sync');
+ 			expect(schema).toBe('neon_auth');
+-			expect(columns).toHaveLength(6);
++			expect(columns).toHaveLength(7);
+ 		});
+ 
+ 		test('Enable RLS function', () => {

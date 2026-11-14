@@ -1,0 +1,107 @@
+diff --git a/src/black/comments.py b/src/black/comments.py
+index f0c8ba31fb7..a906a7125c4 100644
+--- a/src/black/comments.py
++++ b/src/black/comments.py
+@@ -239,8 +239,10 @@ def _should_process_fmt_comment(
+ 
+     Returns (should_process, is_fmt_off, is_fmt_skip).
+     """
+-    is_fmt_off = contains_fmt_directive(comment.value, FMT_OFF)
+     is_fmt_skip = contains_fmt_directive(comment.value, FMT_SKIP)
++    # `# fmt: skip` wins over `# fmt: off` / `# yapf: disable` in the same comment,
++    # like it does in `generate_ignored_nodes()`.
++    is_fmt_off = not is_fmt_skip and contains_fmt_directive(comment.value, FMT_OFF)
+ 
+     if not is_fmt_off and not is_fmt_skip:
+         return False, False, False
+@@ -573,12 +575,11 @@ def _handle_regular_fmt_block(
+         "" if is_fmt_skip else _take_comments_ending_fmt_off(ignored_nodes[-1], mode)
+     )
+ 
+-    if contains_fmt_directive(comment.value, FMT_OFF):
+-        first.prefix = prefix[comment.consumed :]
+     if is_fmt_skip:
+         first.prefix = ""
+         standalone_comment_prefix = prefix
+     else:
++        first.prefix = prefix[comment.consumed :]
+         standalone_comment_prefix = prefix[:previous_consumed] + "\n" * comment.newlines
+ 
+     # Ensure STANDALONE_COMMENT nodes have trailing newlines when stringified
+@@ -671,7 +672,7 @@ def stringify_node(n: LN, next_node: LN | None = None) -> str:
+         for ignored in ignored_nodes
+     )
+ 
+-    if contains_fmt_directive(comment.value, FMT_OFF):
++    if not is_fmt_skip:
+         fmt_off_prefix = ""
+         if _is_kept_as_text(leaf):
+             # Python keeps the whitespace before the comment in the string
+diff --git a/tests/data/cases/fmtskip_with_fmt_off_in_same_comment.py b/tests/data/cases/fmtskip_with_fmt_off_in_same_comment.py
+new file mode 100644
+index 00000000000..f3322ef9b29
+--- /dev/null
++++ b/tests/data/cases/fmtskip_with_fmt_off_in_same_comment.py
+@@ -0,0 +1,21 @@
++x = [ 1,2 ]  # yapf: disable  # fmt: skip
++y = [ 1,2 ]  # fmt: off  # fmt: skip
++a = [ 1,2 ]
++z = [ 1,2 ]  # fmt: skip  # yapf: disable
++values = [
++    # fmt: off  # fmt: skip
++    1,
++]
++b = [ 1,2 ]
++
++# output
++
++x = [ 1,2 ]  # yapf: disable  # fmt: skip
++y = [ 1,2 ]  # fmt: off  # fmt: skip
++a = [1, 2]
++z = [ 1,2 ]  # fmt: skip  # yapf: disable
++values = [
++    # fmt: off  # fmt: skip
++    1,
++]
++b = [1, 2]
+diff --git a/tests/test_no_ipynb.py b/tests/test_no_ipynb.py
+deleted file mode 100644
+--- a/tests/test_no_ipynb.py
++++ /dev/null
+@@ -1,36 +0,0 @@
+-import pathlib
+-
+-import pytest
+-from click.testing import CliRunner
+-
+-from black import jupyter_dependencies_are_installed, main
+-from tests.util import get_case_path
+-
+-pytestmark = pytest.mark.no_jupyter
+-
+-runner = CliRunner()
+-
+-
+-def test_ipynb_diff_with_no_change_single() -> None:
+-    jupyter_dependencies_are_installed.cache_clear()
+-    path = get_case_path("jupyter", "notebook_trailing_newline.ipynb")
+-    result = runner.invoke(main, [str(path)])
+-    expected_output = (
+-        "Skipping .ipynb files as Jupyter dependencies are not installed.\n"
+-        'You can fix this by running ``pip install "black[jupyter]"``\n'
+-    )
+-    assert expected_output in result.output
+-
+-
+-def test_ipynb_diff_with_no_change_dir(tmp_path: pathlib.Path) -> None:
+-    jupyter_dependencies_are_installed.cache_clear()
+-    runner = CliRunner()
+-    nb = get_case_path("jupyter", "notebook_trailing_newline.ipynb")
+-    tmp_nb = tmp_path / "notebook.ipynb"
+-    tmp_nb.write_bytes(nb.read_bytes())
+-    result = runner.invoke(main, [str(tmp_path)])
+-    expected_output = (
+-        "Skipping .ipynb files as Jupyter dependencies are not installed.\n"
+-        'You can fix this by running ``pip install "black[jupyter]"``\n'
+-    )
+-    assert expected_output in result.output

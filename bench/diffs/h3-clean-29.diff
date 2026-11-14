@@ -1,0 +1,232 @@
+diff --git a/aiohttp/_websocket/reader_py.py b/aiohttp/_websocket/reader_py.py
+index 5e3b60da221..ea6b67234b7 100644
+--- a/aiohttp/_websocket/reader_py.py
++++ b/aiohttp/_websocket/reader_py.py
+@@ -196,7 +196,6 @@ def __init__(
+         decode_text: bool,
+     ) -> None:
+         self.queue = queue
+-        self._max_msg_size = max_msg_size
+         self._decode_text = decode_text
+         # Parked on the queue while parsing is stalled; created once so
+         # stalling does not allocate.
+@@ -211,9 +210,6 @@ def __init__(
+         self._frame_opcode: int = OP_CODE_NOT_SET
+         # Reads of an in-flight frame, joined once when it completes.
+         self._payload_fragments: list[bytes] = []
+-        # Fold reads into _payload_buffer past this count to bound the object
+-        # count (bytes are bounded by max_msg_size).
+-        self._max_fragments = max(1024, max_msg_size // 256) if max_msg_size else 0
+         self._payload_buffer = bytearray()
+         self._frame_payload_len = 0
+ 
+@@ -225,6 +221,34 @@ def __init__(
+         self._compressed: int = COMPRESSED_NOT_SET
+         self._decompressobj: ZLibDecompressor | None = None
+         self._compress = compress
++        self.set_max_msg_size(max_msg_size)
++
++    def set_max_msg_size(self, max_msg_size: int) -> None:
++        """Set the maximum message size, including a data frame still being received."""
++        self._max_msg_size = max_msg_size
++        # Fold reads into _payload_buffer past this count to bound the object
++        # count (bytes are bounded by max_msg_size).
++        self._max_fragments = max(1024, max_msg_size // 256) if max_msg_size else 0
++        if (
++            not max_msg_size
++            or self._exc is not None
++            or self._state not in (READ_PAYLOAD_MASK, READ_PAYLOAD)
++            or self._frame_opcode
++            not in {OP_CODE_TEXT, OP_CODE_BINARY, OP_CODE_CONTINUATION}
++        ):
++            return
++        # The header of this frame passed the previous, larger limit.
++        msg_size = (
++            self._frame_payload_len + self._payload_bytes_to_read + len(self._partial)
++        )
++        if msg_size >= max_msg_size:
++            self._exc = WebSocketError(
++                WSCloseCode.MESSAGE_TOO_BIG,
++                f"Message size {msg_size} exceeds limit {max_msg_size}",
++            )
++            set_exception(self.queue, self._exc)
++            self._payload_fragments.clear()
++            self._payload_buffer = bytearray()
+ 
+     def feed_eof(self) -> None:
+         self.queue.feed_eof()
+diff --git a/aiohttp/web_ws.py b/aiohttp/web_ws.py
+index 1ed0d54b172..9847952412c 100644
+--- a/aiohttp/web_ws.py
++++ b/aiohttp/web_ws.py
+@@ -430,6 +430,22 @@ def ws_protocol(self) -> str | None:
+     def compress(self) -> int | bool:
+         return self._compress
+ 
++    @property
++    def max_msg_size(self) -> int:
++        return self._max_msg_size
++
++    def set_max_msg_size(self, max_msg_size: int) -> None:
++        """Set the maximum size of a received message.
++
++        Can be called before or after prepare().
++        """
++        # The C reader stores the limit as an unsigned 32-bit int.
++        if not 0 <= max_msg_size < 2**32:
++            raise ValueError("max_msg_size must be between 0 and 2**32 - 1")
++        if self._parser is not None:
++            self._parser.set_max_msg_size(max_msg_size)
++        self._max_msg_size = max_msg_size
++
+     def get_extra_info(self, name: str, default: Any = None) -> Any:
+         """Get optional transport information.
+ 
+diff --git a/tests/test_web_websocket.py b/tests/test_web_websocket.py
+index ecc4e025b47..e8f6b1cec3d 100644
+--- a/tests/test_web_websocket.py
++++ b/tests/test_web_websocket.py
+@@ -72,6 +72,25 @@ def maker(
+     return maker
+ 
+ 
++@pytest.mark.parametrize("max_msg_size", [-1, 2**32])
++def test_set_max_msg_size_out_of_range(max_msg_size: int) -> None:
++    ws = web.WebSocketResponse(max_msg_size=1024)
++
++    with pytest.raises(ValueError, match="max_msg_size must be between"):
++        ws.set_max_msg_size(max_msg_size)
++    assert ws.max_msg_size == 1024
++
++
++def test_set_max_msg_size_rejected_by_parser() -> None:
++    ws = web.WebSocketResponse(max_msg_size=1024)
++    ws._parser = mock.Mock()
++    ws._parser.set_max_msg_size.side_effect = RuntimeError
++
++    with pytest.raises(RuntimeError):
++        ws.set_max_msg_size(2048)
++    assert ws.max_msg_size == 1024
++
++
+ async def test_nonstarted_ping() -> None:
+     ws = web.WebSocketResponse()
+     with pytest.raises(RuntimeError):
+diff --git a/tests/test_web_websocket_functional.py b/tests/test_web_websocket_functional.py
+index cb4054d83cf..f3596ab6bca 100644
+--- a/tests/test_web_websocket_functional.py
++++ b/tests/test_web_websocket_functional.py
+@@ -403,6 +403,53 @@ async def handler(request: web.Request) -> web.WebSocketResponse:
+     assert resp.status == 400
+ 
+ 
++@pytest.mark.parametrize("after_prepare", (False, True))
++async def test_set_max_msg_size(
++    aiohttp_client: AiohttpClient, after_prepare: bool
++) -> None:
++    async def handler(request: web.Request) -> web.WebSocketResponse:
++        ws = web.WebSocketResponse()
++        if not after_prepare:
++            ws.set_max_msg_size(16)
++        await ws.prepare(request)
++        if after_prepare:
++            ws.set_max_msg_size(16)
++        assert ws.max_msg_size == 16
++        await ws.send_str("limited")
++
++        msg = await ws.receive()
++        assert msg.type is WSMsgType.TEXT
++        ws.set_max_msg_size(4 * 1024 * 1024)
++        await ws.send_str("raised")
++
++        msg = await ws.receive()
++        assert msg.type is WSMsgType.TEXT
++        assert msg.data == "x" * 1024
++        ws.set_max_msg_size(16)
++        await ws.send_str("lowered")
++
++        msg = await ws.receive()
++        assert msg.type is WSMsgType.ERROR
++        await ws.close()
++        return ws
++
++    app = web.Application()
++    app.router.add_route("GET", "/", handler)
++    client = await aiohttp_client(app)
++
++    ws = await client.ws_connect("/")
++    assert await ws.receive_str() == "limited"
++    await ws.send_str("small")
++    assert await ws.receive_str() == "raised"
++    await ws.send_str("x" * 1024)
++    assert await ws.receive_str() == "lowered"
++    await ws.send_str("x" * 1024)
++
++    msg = await ws.receive()
++    assert msg.type is WSMsgType.CLOSE
++    assert msg.data == WSCloseCode.MESSAGE_TOO_BIG
++
++
+ async def test_websocket_json(aiohttp_client: AiohttpClient) -> None:
+     async def handler(request: web.Request) -> web.WebSocketResponse:
+         ws = web.WebSocketResponse()
+diff --git a/tests/test_websocket_parser.py b/tests/test_websocket_parser.py
+index e55f6ad8f95..6c80f7397dd 100644
+--- a/tests/test_websocket_parser.py
++++ b/tests/test_websocket_parser.py
+@@ -868,6 +868,55 @@ def test_msg_too_large_across_fragments(out: WebSocketDataQueue) -> None:
+     assert ctx.value.code == WSCloseCode.MESSAGE_TOO_BIG
+ 
+ 
++def test_set_max_msg_size_lowers_limit(out: WebSocketDataQueue) -> None:
++    parser = WebSocketReader(out, 4 * 1024 * 1024, compress=False, decode_text=True)
++    parser.set_max_msg_size(256)
++
++    header = PACK_LEN3(0x80 | WSMsgType.TEXT, 127, 1024 * 1024)
++    with pytest.raises(
++        WebSocketError, match=r"^Message size 1048576 exceeds limit 256$"
++    ) as ctx:
++        parser._feed_data(header)
++    assert ctx.value.code == WSCloseCode.MESSAGE_TOO_BIG
++
++
++def test_set_max_msg_size_raises_limit(out: WebSocketDataQueue) -> None:
++    parser = WebSocketReader(out, 256, compress=False, decode_text=True)
++    parser.set_max_msg_size(4096)
++
++    parser._feed_data(build_frame(b"a" * 1000, WSMsgType.TEXT))
++    assert out._buffer[0] == WSMessageText(data="a" * 1000, size=1000, extra="")
++
++
++def test_set_max_msg_size_rejects_frame_in_progress(out: WebSocketDataQueue) -> None:
++    parser = WebSocketReader(out, 4 * 1024 * 1024, compress=False, decode_text=True)
++    frame = build_frame(b"a" * 1024, WSMsgType.TEXT)
++    assert parser.feed_data(frame[:100]) == (False, b"")
++
++    parser.set_max_msg_size(256)
++
++    exc = out.exception()
++    assert isinstance(exc, WebSocketError)
++    assert exc.code == WSCloseCode.MESSAGE_TOO_BIG
++    assert str(exc) == "Message size 1024 exceeds limit 256"
++    assert parser.feed_data(frame[100:]) == (True, frame[100:])
++    assert not out._buffer
++
++
++def test_set_max_msg_size_raised_for_frame_in_progress(
++    out: WebSocketDataQueue,
++) -> None:
++    parser = WebSocketReader(out, 2048, compress=False, decode_text=True)
++    frame = build_frame(b"a" * 1024, WSMsgType.TEXT)
++    parser.feed_data(frame[:100])
++
++    parser.set_max_msg_size(4096)
++    parser.feed_data(frame[100:])
++
++    assert out.exception() is None
++    assert out._buffer[0] == WSMessageText(data="a" * 1024, size=1024, extra="")
++
++
+ def test_msg_too_large_text_after_non_fin_text(out: WebSocketDataQueue) -> None:
+     # Protocol-violating sequence: a fresh TEXT arrives while a fragmented
+     # message is still open.

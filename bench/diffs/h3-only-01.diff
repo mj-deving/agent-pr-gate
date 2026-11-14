@@ -1,0 +1,206 @@
+diff --git a/www/src/demos/page-demo-reload.test.ts b/www/src/demos/page-demo-reload.test.ts
+new file mode 100644
+index 00000000000..41ddf2cdd7c
+--- /dev/null
++++ b/www/src/demos/page-demo-reload.test.ts
+@@ -0,0 +1,56 @@
++// @vitest-environment jsdom
++import { act, createElement } from 'react';
++import { createRoot } from 'react-dom/client';
++import { expect, test, vi } from 'vitest';
++
++import type * as ReloadOnce from '~/reload-once.ts';
++import { reloadPage } from '~/reload-once.ts';
++
++import { DemoBoundary } from './page-demos.tsx';
++
++declare global {
++  var IS_REACT_ACT_ENVIRONMENT: boolean;
++}
++globalThis.IS_REACT_ACT_ENVIRONMENT = true;
++
++vi.mock('~/reload-once.ts', async (importOriginal) => ({
++  ...(await importOriginal<typeof ReloadOnce>()),
++  reloadPage: vi.fn<() => void>(),
++}));
++
++/** Renders a demo that throws `error`, as one whose code failed to load does. */
++async function renderFailingDemo(error: Error) {
++  vi.mocked(reloadPage).mockClear();
++  // React logs what a boundary catches, and so does the boundary.
++  vi.spyOn(console, 'error').mockImplementation(() => undefined);
++  const container = document.body.appendChild(document.createElement('div'));
++  const root = createRoot(container);
++  const Demo = () => {
++    throw error;
++  };
++  await act(async () => {
++    root.render(createElement(DemoBoundary, null, createElement(Demo)));
++  });
++  expect(container.innerHTML).toBe('');
++  await act(async () => {
++    root.unmount();
++  });
++}
++
++// Regression: a demo whose chunk a deploy replaced was hidden for good:
++// reloading the page brings it back.
++test.only('a demo whose chunk a deploy replaced reloads the page once', async () => {
++  sessionStorage.clear();
++  await renderFailingDemo(
++    new TypeError(
++      'Failed to fetch dynamically imported module: https://trpc.io/assets/waterfalls-DbNVZoEM.js',
++    ),
++  );
++  expect(reloadPage).toHaveBeenCalledTimes(1);
++});
++
++test('a demo with a bug is hidden, without a reload', async () => {
++  sessionStorage.clear();
++  await renderFailingDemo(new Error('A bug'));
++  expect(reloadPage).not.toHaveBeenCalled();
++});
+diff --git a/www/src/demos/page-demos.tsx b/www/src/demos/page-demos.tsx
+index 4e98b1d5799..aa8517c7c66 100644
+--- a/www/src/demos/page-demos.tsx
++++ b/www/src/demos/page-demos.tsx
+@@ -13,6 +13,7 @@ import {
+   type DemoProps,
+   splitAtDemos,
+ } from './names.ts';
++import { isChunkLoadError, reloadOnce, reloadPage } from '~/reload-once.ts';
+ 
+ type Demo = ComponentType<DemoProps>;
+ 
+@@ -78,8 +79,12 @@ function LoadedDemo(props: DemoFence) {
+   return createElement(demo, { options: props.options });
+ }
+ 
+-/** A demo that throws renders nothing, and the rest of the page keeps working. */
+-class DemoBoundary extends Component<
++/**
++ * A demo that throws renders nothing, and the rest of the page keeps working.
++ * One whose chunk a deploy replaced reloads the page once, as a route does
++ * (`components/error-page.tsx`), which brings it back.
++ */
++export class DemoBoundary extends Component<
+   { readonly children: ReactNode },
+   { readonly failed: boolean }
+ > {
+@@ -91,6 +96,9 @@ class DemoBoundary extends Component<
+ 
+   override componentDidCatch(error: unknown) {
+     console.error('A demo failed', error);
++    if (isChunkLoadError(error)) {
++      reloadOnce(`route:${window.location.pathname}`, reloadPage);
++    }
+   }
+ 
+   override render() {
+diff --git a/www/src/pages.test.ts b/www/src/pages.test.ts
+new file mode 100644
+index 00000000000..c93447cfe43
+--- /dev/null
++++ b/www/src/pages.test.ts
+@@ -0,0 +1,33 @@
++import {
++  createMemoryHistory,
++  createRootRoute,
++  createRouter,
++} from '@tanstack/react-router';
++import { expect, test } from 'vitest';
++
++import { validateQuerySearch } from './pages.ts';
++
++/** What a page reads as `?q=` once the router has validated `href`. */
++function searchedFor(href: string) {
++  const router = createRouter({
++    history: createMemoryHistory({ initialEntries: [href] }),
++    routeTree: createRootRoute({ validateSearch: validateQuerySearch }),
++  });
++  const [root] = router.matchRoutes(router.state.location);
++  const search: Record<string, unknown> = root?.search ?? {};
++  return search['q'];
++}
++
++test('?q= is what was searched for, numbers included', () => {
++  expect(searchedFor('/?q=batching')).toBe('batching');
++  expect(searchedFor('/?q=404')).toBe('404');
++});
++
++// Regression: `/search?q=null` threw `query.trim is not a function` as the
++// server rendered it: the router parses `?q=` as JSON, and a value the
++// route's validation left out kept what the URL said.
++test("a ?q= that isn't text searches for nothing", () => {
++  for (const href of ['/?q=null', '/?q=%5B1%5D', '/?q=%7B%7D']) {
++    expect(searchedFor(href)).toBeUndefined();
++  }
++});
+diff --git a/www/src/pages.ts b/www/src/pages.ts
+index 6ca81d32eaf..23da11c6922 100644
+--- a/www/src/pages.ts
++++ b/www/src/pages.ts
+@@ -30,7 +30,9 @@ export interface QuerySearch {
+ 
+ /**
+  * `?q=`, if it's there and not empty. The router parses `?q=404` as a
+- * number; it's still what was searched for.
++ * number; it's still what was searched for. Anything else (`?q=null`,
++ * `?q=[1]`) is `undefined`, said out loud: the router lays what this returns
++ * over what the URL said, so a key left out keeps the URL's value.
+  */
+ export function validateQuerySearch(
+   search: Record<string, unknown>,
+@@ -40,5 +42,5 @@ export function validateQuerySearch(
+     typeof query === 'number' || typeof query === 'boolean'
+       ? String(query)
+       : query;
+-  return typeof text === 'string' && text !== '' ? { q: text } : {};
++  return { q: typeof text === 'string' && text !== '' ? text : undefined };
+ }
+diff --git a/www/src/reload-once.ts b/www/src/reload-once.ts
+index df3738c2218..d8da45d70ff 100644
+--- a/www/src/reload-once.ts
++++ b/www/src/reload-once.ts
+@@ -6,6 +6,11 @@
+  * (`components/error-page.tsx`).
+  */
+ 
++/** Reloads the page: what the site passes to {@link reloadOnce}. */
++export function reloadPage() {
++  window.location.reload();
++}
++
+ const reloadedKey = (key: string) => `trpc-docs:reloaded-for:${key}`;
+ 
+ /**
+diff --git a/www/src/router.tsx b/www/src/router.tsx
+index 4d8f47c54a6..48ac9dec552 100644
+--- a/www/src/router.tsx
++++ b/www/src/router.tsx
+@@ -20,6 +20,7 @@ import {
+   type RenderedPath,
+   renderedPathRewrite,
+ } from './rendered-path.ts';
++import { reloadPage } from './reload-once.ts';
+ import { routeTree } from './routeTree.gen.ts';
+ import {
+   type DehydratedRelease,
+@@ -30,7 +31,7 @@ import {
+ 
+ export function getRouter() {
+   const router = createRouter({
+-    ...errorOptions(() => window.location.reload()),
++    ...errorOptions(reloadPage),
+     defaultNotFoundComponent: NotFound,
+     // Hovering a link loads the page's content chunk, so the click renders
+     // without waiting.
+@@ -52,7 +53,7 @@ export function getRouter() {
+       hydrateCardDay(dehydrated);
+       hydrateRelease(dehydrated);
+       hydrateRenderedPath(dehydrated);
+-      await hydratePages(dehydrated, () => window.location.reload());
++      await hydratePages(dehydrated, reloadPage);
+     },
+     rewrite: composeRewrites([renderedPathRewrite, firstDocRewrite]),
+     routeTree,

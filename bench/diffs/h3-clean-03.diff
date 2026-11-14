@@ -1,0 +1,40 @@
+diff --git a/src/language-js/print/binaryish.js b/src/language-js/print/binaryish.js
+index fcc6be3e5355..62814af4ee8a 100644
+--- a/src/language-js/print/binaryish.js
++++ b/src/language-js/print/binaryish.js
+@@ -77,7 +77,9 @@ function printBinaryishExpression(path, options, print) {
+     (parent.type === "IfStatement" ||
+       parent.type === "WhileStatement" ||
+       parent.type === "SwitchStatement" ||
+-      parent.type === "DoWhileStatement");
++      parent.type === "DoWhileStatement" ||
++      parent.type === "MatchStatement" ||
++      parent.type === "MatchExpression");
+ 
+   const parts = printBinaryishExpressions(
+     path,
+diff --git a/tests/format/flow/match/binary-expression.js b/tests/format/flow/match/binary-expression.js
+new file mode 100644
+index 000000000000..38124673348a
+--- /dev/null
++++ b/tests/format/flow/match/binary-expression.js
+@@ -0,0 +1,19 @@
++match (veryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryLong > veryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryLong) {
++}
++
++match ($veryLongAndVeryVerboseVariableName && $anotherVeryLongAndVeryVerboseVariableName) {
++}
++
++match ($longButSlightlyShorterVariableName && $anotherSlightlyShorterVariableName) {
++}
++
++_ = [
++match (veryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryLong > veryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryVeryLong) {
++},
++
++match ($veryLongAndVeryVerboseVariableName && $anotherVeryLongAndVeryVerboseVariableName) {
++},
++
++match ($longButSlightlyShorterVariableName && $anotherSlightlyShorterVariableName) {
++},
++]

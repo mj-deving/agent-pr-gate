@@ -1,0 +1,155 @@
+diff --git a/build.config.ts b/build.config.ts
+deleted file mode 100644
+index 1cb155c5..00000000
+--- a/build.config.ts
++++ /dev/null
+@@ -1,10 +0,0 @@
+-import { defineBuildConfig } from "unbuild";
+-
+-export default defineBuildConfig({
+-  declaration: true,
+-  rollup: {
+-    emitCJS: true,
+-  },
+-  entries: ["src/index"],
+-  externals: ["undici"],
+-});
+diff --git a/node.d.ts b/node.d.ts
+deleted file mode 100644
+index 60bf9b5a..00000000
+--- a/node.d.ts
++++ /dev/null
+@@ -1 +0,0 @@
+-export * from "./dist/node";
+diff --git a/package.json b/package.json
+index 7643927f..577bf824 100644
+--- a/package.json
++++ b/package.json
+@@ -10,18 +10,16 @@
+     "./package.json": "./package.json",
+     "./dist/index.mjs": "./dist/index.mjs"
+   },
+-  "types": "./dist/index.d.ts",
++  "types": "./dist/index.d.mts",
+   "files": [
+-    "dist",
+-    "node.d.ts"
++    "dist"
+   ],
+   "scripts": {
+-    "build": "unbuild",
++    "build": "obuild src/index.ts",
+     "dev": "vitest",
+-    "lint": "eslint . && prettier -c src test playground examples",
+-    "lint:fix": "eslint --fix . && prettier -w src test playground examples",
++    "lint": "eslint . && prettier -c src test examples",
++    "lint:fix": "eslint --fix . && prettier -w src test examples",
+     "prepack": "pnpm build",
+-    "play": "jiti playground/index.ts",
+     "release": "pnpm test && pnpm build && changelogen --release --prerelease --publish --publishTag alpha --push",
+     "test": "pnpm lint && vitest run --coverage"
+   },
+@@ -35,15 +33,10 @@
+     "changelogen": "^0.6.2",
+     "eslint": "^9.38.0",
+     "eslint-config-unjs": "^0.5.0",
+-    "fetch-blob": "^4.0.0",
+-    "formdata-polyfill": "^4.0.10",
+     "h3": "^2.0.1-rc.5",
+-    "jiti": "^2.6.1",
+-    "listhen": "^1.9.0",
++    "obuild": "^0.3.0",
+     "prettier": "^3.6.2",
+-    "std-env": "^3.10.0",
+     "typescript": "^5.9.3",
+-    "unbuild": "^3.6.1",
+     "undici": "^7.16.0",
+     "vitest": "^4.0.4"
+   },
+diff --git a/playground/index.mjs b/playground/index.mjs
+deleted file mode 100644
+index c304c9ad..00000000
+--- a/playground/index.mjs
++++ /dev/null
+@@ -1,12 +0,0 @@
+-import { $fetch } from "..";
+-
+-async function main() {
+-  await $fetch("http://google.com/404");
+-}
+-
+-// eslint-disable-next-line unicorn/prefer-top-level-await
+-main().catch((error) => {
+-  console.error(error);
+-  // eslint-disable-next-line unicorn/no-process-exit
+-  process.exit(1);
+-});
+diff --git a/test/index.test.ts b/test/index.test.ts
+index 4ea4cb6b..bd1a8efe 100644
+--- a/test/index.test.ts
++++ b/test/index.test.ts
+@@ -9,7 +9,6 @@ import {
+ } from "vitest";
+ import { Readable } from "node:stream";
+ import { H3, HTTPError, readBody, serve } from "h3";
+-import { nodeMajorVersion } from "std-env";
+ import { $fetch } from "../src/index.ts";
+ 
+ describe("ofetch", () => {
+@@ -179,27 +178,24 @@ describe("ofetch", () => {
+     expect(body).to.deep.eq(message);
+   });
+ 
+-  it.skipIf(Number(nodeMajorVersion) < 18)(
+-    "Handle ReadableStream body",
+-    async () => {
+-      const message = "Hallo von Pascal";
+-      const { body } = await $fetch(getURL("echo"), {
+-        method: "POST",
+-        headers: {
+-          "content-length": "16",
++  it("Handle ReadableStream body", async () => {
++    const message = "Hallo von Pascal";
++    const { body } = await $fetch(getURL("echo"), {
++      method: "POST",
++      headers: {
++        "content-length": "16",
++      },
++      body: new ReadableStream({
++        start(controller) {
++          controller.enqueue(new TextEncoder().encode(message));
++          controller.close();
+         },
+-        body: new ReadableStream({
+-          start(controller) {
+-            controller.enqueue(new TextEncoder().encode(message));
+-            controller.close();
+-          },
+-        }),
+-      });
+-      expect(body).to.deep.eq(message);
+-    }
+-  );
++      }),
++    });
++    expect(body).to.deep.eq(message);
++  });
+ 
+-  it.skipIf(Number(nodeMajorVersion) < 18)("Handle Readable body", async () => {
++  it("Handle Readable body", async () => {
+     const message = "Hallo von Pascal";
+     const { body } = await $fetch(getURL("echo"), {
+       method: "POST",
+diff --git a/playground/index.ts b/test/playground.ts
+similarity index 90%
+rename from playground/index.ts
+rename to test/playground.ts
+index 5bca695d..f2d84067 100644
+--- a/playground/index.ts
++++ b/test/playground.ts
+@@ -1,4 +1,4 @@
+-import { $fetch } from "../src/node";
++import { $fetch } from "../src/index.ts";
+ 
+ async function main() {
+   // const r = await $fetch<string>('http://google.com/404')

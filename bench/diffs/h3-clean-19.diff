@@ -1,0 +1,198 @@
+diff --git a/src/black/__init__.py b/src/black/__init__.py
+index b2516eb4103..488a193c408 100644
+--- a/src/black/__init__.py
++++ b/src/black/__init__.py
+@@ -1506,7 +1506,7 @@ def _format_str_once(
+             Feature.PARENTHESIZED_CONTEXT_MANAGERS,
+             Feature.UNPARENTHESIZED_EXCEPT_TYPES,
+             Feature.T_STRINGS,
+-            Feature.UNPARENTHESIZED_WALRUS_IN_SETS,
++            Feature.BARE_SET_SUBSCRIPT_WALRUSES,
+         }
+         if supports_feature(versions, feature)
+     }
+@@ -1626,22 +1626,7 @@ def get_features_used(
+ ) -> set[Feature]:
+     """Return a set of (relatively) new Python features used in this file.
+ 
+-    Currently looking for:
+-    - f-strings;
+-    - self-documenting expressions in f-strings (f"{x=}");
+-    - underscores in numeric literals;
+-    - trailing commas after * or ** in function signatures and calls;
+-    - positional only arguments in function signatures and lambdas;
+-    - assignment expression;
+-    - relaxed decorator syntax;
+-    - usage of __future__ flags (annotations);
+-    - print / exec statements;
+-    - parenthesized context managers;
+-    - match statements;
+-    - except* clause;
+-    - variadic generics;
+-    - lazy imports;
+-    - starred or double-starred comprehensions.
++    Should check for as many features in the `Feature` enum as possible.
+     """
+     features: set[Feature] = set()
+     if future_imports:
+@@ -1677,6 +1662,8 @@ def get_features_used(
+ 
+         elif n.type == token.COLONEQUAL:
+             features.add(Feature.ASSIGNMENT_EXPRESSIONS)
++            if n.parent and n.parent.type in {syms.dictsetmaker, syms.subscript}:
++                features.add(Feature.BARE_SET_SUBSCRIPT_WALRUSES)
+ 
+         elif n.type == token.LAZY:
+             features.add(Feature.LAZY_IMPORTS)
+diff --git a/src/black/linegen.py b/src/black/linegen.py
+index af95f61a0eb..e8c00fbc609 100644
+--- a/src/black/linegen.py
++++ b/src/black/linegen.py
+@@ -2919,13 +2919,12 @@ def maybe_make_parens_invisible_in_atom(
+             syms.simple_stmt,
+         ]:
+             return False
++
+         if (
+-            parent.type == syms.atom
+-            and parent.children[0].type == token.LBRACE
+-            and Feature.UNPARENTHESIZED_WALRUS_IN_SETS not in features
+-        ):
+-            # A named expression in a set literal needs its parentheses before
+-            # Python 3.10 (3.9.1 accepts it, but 3.9.0 doesn't).
++            is_subscript
++            or (parent.type == syms.atom and parent.children[0].type == token.LBRACE)
++        ) and Feature.BARE_SET_SUBSCRIPT_WALRUSES not in features:
++            # A walrus in a subscript or set literal needs its parentheses before 3.10
+             return False
+ 
+     first = node.children[0]
+diff --git a/src/black/mode.py b/src/black/mode.py
+index 4f1be8f29e8..228f87b84db 100644
+--- a/src/black/mode.py
++++ b/src/black/mode.py
+@@ -59,7 +59,7 @@ class Feature(Enum):
+     T_STRINGS = 22
+     LAZY_IMPORTS = 23
+     UNPACKING_IN_COMPREHENSIONS = 24
+-    UNPARENTHESIZED_WALRUS_IN_SETS = 25
++    BARE_SET_SUBSCRIPT_WALRUSES = 25
+     FORCE_OPTIONAL_PARENTHESES = 50
+ 
+     # __future__ flags
+@@ -132,7 +132,7 @@ class Feature(Enum):
+         Feature.UNPACKING_ON_FLOW,
+         Feature.ANN_ASSIGN_EXTENDED_RHS,
+         Feature.PARENTHESIZED_CONTEXT_MANAGERS,
+-        Feature.UNPARENTHESIZED_WALRUS_IN_SETS,
++        Feature.BARE_SET_SUBSCRIPT_WALRUSES,
+         Feature.PATTERN_MATCHING,
+     },
+     TargetVersion.PY311: {
+@@ -149,7 +149,7 @@ class Feature(Enum):
+         Feature.UNPACKING_ON_FLOW,
+         Feature.ANN_ASSIGN_EXTENDED_RHS,
+         Feature.PARENTHESIZED_CONTEXT_MANAGERS,
+-        Feature.UNPARENTHESIZED_WALRUS_IN_SETS,
++        Feature.BARE_SET_SUBSCRIPT_WALRUSES,
+         Feature.PATTERN_MATCHING,
+         Feature.EXCEPT_STAR,
+         Feature.VARIADIC_GENERICS,
+@@ -168,7 +168,7 @@ class Feature(Enum):
+         Feature.UNPACKING_ON_FLOW,
+         Feature.ANN_ASSIGN_EXTENDED_RHS,
+         Feature.PARENTHESIZED_CONTEXT_MANAGERS,
+-        Feature.UNPARENTHESIZED_WALRUS_IN_SETS,
++        Feature.BARE_SET_SUBSCRIPT_WALRUSES,
+         Feature.PATTERN_MATCHING,
+         Feature.EXCEPT_STAR,
+         Feature.VARIADIC_GENERICS,
+@@ -188,7 +188,7 @@ class Feature(Enum):
+         Feature.UNPACKING_ON_FLOW,
+         Feature.ANN_ASSIGN_EXTENDED_RHS,
+         Feature.PARENTHESIZED_CONTEXT_MANAGERS,
+-        Feature.UNPARENTHESIZED_WALRUS_IN_SETS,
++        Feature.BARE_SET_SUBSCRIPT_WALRUSES,
+         Feature.PATTERN_MATCHING,
+         Feature.EXCEPT_STAR,
+         Feature.VARIADIC_GENERICS,
+@@ -209,7 +209,7 @@ class Feature(Enum):
+         Feature.UNPACKING_ON_FLOW,
+         Feature.ANN_ASSIGN_EXTENDED_RHS,
+         Feature.PARENTHESIZED_CONTEXT_MANAGERS,
+-        Feature.UNPARENTHESIZED_WALRUS_IN_SETS,
++        Feature.BARE_SET_SUBSCRIPT_WALRUSES,
+         Feature.PATTERN_MATCHING,
+         Feature.EXCEPT_STAR,
+         Feature.VARIADIC_GENERICS,
+@@ -232,7 +232,7 @@ class Feature(Enum):
+         Feature.UNPACKING_ON_FLOW,
+         Feature.ANN_ASSIGN_EXTENDED_RHS,
+         Feature.PARENTHESIZED_CONTEXT_MANAGERS,
+-        Feature.UNPARENTHESIZED_WALRUS_IN_SETS,
++        Feature.BARE_SET_SUBSCRIPT_WALRUSES,
+         Feature.PATTERN_MATCHING,
+         Feature.EXCEPT_STAR,
+         Feature.VARIADIC_GENERICS,
+diff --git a/tests/data/cases/preview_walrus_in_subscript_py310.py b/tests/data/cases/preview_walrus_in_subscript_py310.py
+new file mode 100644
+index 00000000000..061a023f12a
+--- /dev/null
++++ b/tests/data/cases/preview_walrus_in_subscript_py310.py
+@@ -0,0 +1,23 @@
++# flags: --preview --target-version=py310
++# Since Python 3.10, the parentheses around a named expression in a subscript
++# can be removed.
++x[(y := 1)]
++x[((y := 1))]
++x[(y := 1)] = z
++x[(1)]
++
++
++def lookup(keys, values, key):
++    return values[(i := bisect_left(keys, key))], i
++
++# output
++# Since Python 3.10, the parentheses around a named expression in a subscript
++# can be removed.
++x[y := 1]
++x[y := 1]
++x[y := 1] = z
++x[1]
++
++
++def lookup(keys, values, key):
++    return values[i := bisect_left(keys, key)], i
+diff --git a/tests/data/cases/preview_walrus_in_subscript_py38.py b/tests/data/cases/preview_walrus_in_subscript_py38.py
+new file mode 100644
+index 00000000000..0d0caa72591
+--- /dev/null
++++ b/tests/data/cases/preview_walrus_in_subscript_py38.py
+@@ -0,0 +1,27 @@
++# flags: --preview --target-version=py38
++# Python 3.9 and older need the parentheses around a named expression in a
++# subscript.
++x[(y := 1)]
++x[((y := 1))]
++x[(  # comment
++    y := 1
++)]
++x[(y := 1)] = z
++x[(1)]
++
++
++def lookup(keys, values, key):
++    return values[(i := bisect_left(keys, key))], i
++
++# output
++# Python 3.9 and older need the parentheses around a named expression in a
++# subscript.
++x[(y := 1)]
++x[(y := 1)]
++x[(y := 1)]  # comment
++x[(y := 1)] = z
++x[1]
++
++
++def lookup(keys, values, key):
++    return values[(i := bisect_left(keys, key))], i

@@ -1,0 +1,114 @@
+diff --git a/src/black/trans.py b/src/black/trans.py
+index b3eea047ea9..44f2cb23b7e 100644
+--- a/src/black/trans.py
++++ b/src/black/trans.py
+@@ -1037,17 +1037,24 @@ def do_match(self, line: Line) -> TMatchResult:
+                 }:
+                     continue
+ 
+-                # Keep the parens if stripping them would leave an already
+-                # too-long line with a merged string group glued to an `=`
+-                # prefix (e.g. a def parameter default). Black cannot split
+-                # such a line after the fact, while the parens let the layout
+-                # split the group at its custom breakpoints. See #3497.
+                 if (
+                     not is_line_short_enough(line, mode=line.mode)
+                     and is_valid_index(string_idx - 2)
+-                    and LL[string_idx - 2].type == token.EQUAL
++                    and (
++                        LL[string_idx - 2].type == token.EQUAL
++                        or (
++                            LL[string_idx - 2].type in COMPARATORS
++                            # The trailer ends in a non-empty bracket, e.g. .format(x).
++                            and LL[next_idx - 1].type in CLOSING_BRACKETS
++                            and LL[next_idx - 2].type not in OPENING_BRACKETS
++                            # The string alone would exceed an indented line's width.
++                            and (line.depth + 1) * 4 + str_width(LL[string_idx].value)
++                            > self.line_length
++                        )
++                    )
+                     and self.has_custom_splits(LL[string_idx].value)
+                 ):
++                    # Keep the merged string splittable. See #3497 and #3409.
+                     continue
+ 
+                 string_indices.append(string_idx)
+diff --git a/tests/data/cases/preview_long_strings__regression.py b/tests/data/cases/preview_long_strings__regression.py
+index c7ae643cab3..a540dd061f6 100644
+--- a/tests/data/cases/preview_long_strings__regression.py
++++ b/tests/data/cases/preview_long_strings__regression.py
+@@ -602,6 +602,39 @@ def open_file_from_long_file_path(
+ ):
+     pass
+ 
++# Regression test for https://github.com/psf/black/issues/3409.
++# Keep the parens around a long implicit concatenation used as a comparison
++# operand so it stays splittable, but strip them when the result fits.
++def assert_on_error_message():
++    assert remove_color_code(output) == (
++        "error: not checking stubs due to mypy build errors:\n{}.pyi:2: "
++        'error: Name "f" already defined'.format(TEST_MODULE_NAME)
++    )
++    assert remove_color_code(output) != (
++        "error: not checking stubs due to mypy build errors in this module: "
++        'error: Name "f" already defined and more: {}'.format(TEST_MODULE_NAME)
++    )
++    assert remove_color_code(output) == (
++        "short "
++        "string".format(TEST_MODULE_NAME)
++    )
++    assert get_the_current_value() == (
++        "error: not checking stubs due to mypy build errors in this module: "
++        'error: Name "f" already defined and more: {}'.format(TEST_MODULE_NAME)
++    )
++    assert get_the_current_value() == (
++        "error: not checking stubs due to mypy build errors in this module: "
++        'error: Name "%s" already defined and more: %s' % (first, second)
++    )
++    assert get_the_current_value() == (
++        "error: not checking stubs due to mypy build errors in this module: "
++        'error: Name "f" already defined and more'.upper()
++    )
++    assert get_the_current_value() == (
++        "hello "
++        "world {}".format(compute_text(first_argument, second_argument))
++    )
++
+ 
+ # output
+ 
+@@ -1355,3 +1388,34 @@ def open_file_from_long_file_path(
+     ),
+ ):
+     pass
++
++
++# Regression test for https://github.com/psf/black/issues/3409.
++# Keep the parens around a long implicit concatenation used as a comparison
++# operand so it stays splittable, but strip them when the result fits.
++def assert_on_error_message():
++    assert remove_color_code(output) == (
++        "error: not checking stubs due to mypy build errors:\n{}.pyi:2: "
++        'error: Name "f" already defined'.format(TEST_MODULE_NAME)
++    )
++    assert remove_color_code(output) != (
++        "error: not checking stubs due to mypy build errors in this module: "
++        'error: Name "f" already defined and more: {}'.format(TEST_MODULE_NAME)
++    )
++    assert remove_color_code(output) == "short string".format(TEST_MODULE_NAME)
++    assert get_the_current_value() == (
++        "error: not checking stubs due to mypy build errors in this module: "
++        'error: Name "f" already defined and more: {}'.format(TEST_MODULE_NAME)
++    )
++    assert get_the_current_value() == (
++        "error: not checking stubs due to mypy build errors in this module: "
++        'error: Name "%s" already defined and more: %s' % (first, second)
++    )
++    assert (
++        get_the_current_value()
++        == "error: not checking stubs due to mypy build errors in this module: "
++        'error: Name "f" already defined and more'.upper()
++    )
++    assert get_the_current_value() == "hello world {}".format(
++        compute_text(first_argument, second_argument)
++    )

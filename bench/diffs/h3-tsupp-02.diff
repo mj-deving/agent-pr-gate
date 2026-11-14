@@ -1,0 +1,105 @@
+diff --git a/drizzle-zod/package.json b/drizzle-zod/package.json
+index c6440b246e..316cc1d118 100644
+--- a/drizzle-zod/package.json
++++ b/drizzle-zod/package.json
+@@ -1,6 +1,6 @@
+ {
+ 	"name": "drizzle-zod",
+-	"version": "0.8.1",
++	"version": "0.8.2",
+ 	"description": "Generate Zod schemas from Drizzle ORM schemas",
+ 	"type": "module",
+ 	"scripts": {
+diff --git a/drizzle-zod/src/schema.types.internal.ts b/drizzle-zod/src/schema.types.internal.ts
+index 9e790a33b5..1acee0803c 100644
+--- a/drizzle-zod/src/schema.types.internal.ts
++++ b/drizzle-zod/src/schema.types.internal.ts
+@@ -45,8 +45,11 @@ export type BuildSchema<
+ > = z.ZodObject<
+ 	Simplify<
+ 		{
+-			[K in keyof TColumns as ColumnIsGeneratedAlwaysAs<TColumns[K]> extends true ? never : K]: TColumns[K] extends
+-				infer TColumn extends Column
++			[
++				K in keyof TColumns as ColumnIsGeneratedAlwaysAs<TColumns[K]> extends true ? TType extends 'select' ? K
++					: never
++					: K
++			]: TColumns[K] extends infer TColumn extends Column
+ 				? IsRefinementDefined<TRefinements, K> extends true
+ 					? Assume<HandleRefinement<TType, TRefinements[K & keyof TRefinements], TColumn>, z.ZodType>
+ 				: HandleColumn<TType, TColumn, TCoerce>
+diff --git a/drizzle-zod/tests/mysql.test.ts b/drizzle-zod/tests/mysql.test.ts
+index 6f9a8bf1f7..17bcecdf5b 100644
+--- a/drizzle-zod/tests/mysql.test.ts
++++ b/drizzle-zod/tests/mysql.test.ts
+@@ -15,11 +15,12 @@ const textSchema = z.string().max(CONSTANTS.INT16_UNSIGNED_MAX);
+ test('table - select', (t) => {
+ 	const table = mysqlTable('test', {
+ 		id: serial().primaryKey(),
++		generated: int().generatedAlwaysAs(1).notNull(),
+ 		name: text().notNull(),
+ 	});
+ 
+ 	const result = createSelectSchema(table);
+-	const expected = z.object({ id: serialNumberModeSchema, name: textSchema });
++	const expected = z.object({ id: serialNumberModeSchema, generated: intSchema, name: textSchema });
+ 	expectSchemaShape(t, expected).from(result);
+ 	Expect<Equal<typeof result, typeof expected>>();
+ });
+diff --git a/drizzle-zod/tests/pg.test.ts b/drizzle-zod/tests/pg.test.ts
+index 66549f0283..f982e1a31b 100644
+--- a/drizzle-zod/tests/pg.test.ts
++++ b/drizzle-zod/tests/pg.test.ts
+@@ -25,12 +25,14 @@ const textSchema = z.string();
+ 
+ test('table - select', (t) => {
+ 	const table = pgTable('test', {
+-		id: serial().primaryKey(),
++		id: integer().primaryKey(),
++		// @ts-ignore
++		generated: integer().generatedAlwaysAsIdentity(),
+ 		name: text().notNull(),
+ 	});
+ 
+ 	const result = createSelectSchema(table);
+-	const expected = z.object({ id: integerSchema, name: textSchema });
++	const expected = z.object({ id: integerSchema, generated: integerSchema, name: textSchema });
+ 	expectSchemaShape(t, expected).from(result);
+ 	Expect<Equal<typeof result, typeof expected>>();
+ });
+diff --git a/drizzle-zod/tests/singlestore.test.ts b/drizzle-zod/tests/singlestore.test.ts
+index 6e642d8b26..51c4817925 100644
+--- a/drizzle-zod/tests/singlestore.test.ts
++++ b/drizzle-zod/tests/singlestore.test.ts
+@@ -15,11 +15,12 @@ const textSchema = z.string().max(CONSTANTS.INT16_UNSIGNED_MAX);
+ test('table - select', (t) => {
+ 	const table = singlestoreTable('test', {
+ 		id: serial().primaryKey(),
++		generated: int().generatedAlwaysAs(1).notNull(),
+ 		name: text().notNull(),
+ 	});
+ 
+ 	const result = createSelectSchema(table);
+-	const expected = z.object({ id: serialNumberModeSchema, name: textSchema });
++	const expected = z.object({ id: serialNumberModeSchema, generated: intSchema, name: textSchema });
+ 	expectSchemaShape(t, expected).from(result);
+ 	Expect<Equal<typeof result, typeof expected>>();
+ });
+diff --git a/drizzle-zod/tests/sqlite.test.ts b/drizzle-zod/tests/sqlite.test.ts
+index c7581f4c4e..eff9536686 100644
+--- a/drizzle-zod/tests/sqlite.test.ts
++++ b/drizzle-zod/tests/sqlite.test.ts
+@@ -14,11 +14,12 @@ const textSchema = z.string();
+ test('table - select', (t) => {
+ 	const table = sqliteTable('test', {
+ 		id: int().primaryKey({ autoIncrement: true }),
++		generated: int().generatedAlwaysAs(1).notNull(),
+ 		name: text().notNull(),
+ 	});
+ 
+ 	const result = createSelectSchema(table);
+-	const expected = z.object({ id: intSchema, name: textSchema });
++	const expected = z.object({ id: intSchema, generated: intSchema, name: textSchema });
+ 	expectSchemaShape(t, expected).from(result);
+ 	Expect<Equal<typeof result, typeof expected>>();
+ });

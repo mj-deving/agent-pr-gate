@@ -1,0 +1,10 @@
+diff --git a/tests/config/test_source.py b/tests/config/test_source.py
+index 435db36e4ae..17fbc0e7b02 100644
+--- a/tests/config/test_source.py
++++ b/tests/config/test_source.py
+@@ -49,4 +49,4 @@ def test_source_priority_as_string(priority: str, expected_priority: Priority) -
+         "https://example.com",
+         priority=priority,  # type: ignore[arg-type]
+     )
+-    assert source.priority == Priority.SUPPLEMENTAL
++    assert source.priority == expected_priority  # type: ignore[comparison-overlap]

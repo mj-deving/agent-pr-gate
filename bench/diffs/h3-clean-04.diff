@@ -1,0 +1,55 @@
+diff --git a/package.json b/package.json
+index 577bf824..d04bc1aa 100644
+--- a/package.json
++++ b/package.json
+@@ -23,10 +23,6 @@
+     "release": "pnpm test && pnpm build && changelogen --release --prerelease --publish --publishTag alpha --push",
+     "test": "pnpm lint && vitest run --coverage"
+   },
+-  "dependencies": {
+-    "destr": "^2.0.5",
+-    "ufo": "^1.6.1"
+-  },
+   "devDependencies": {
+     "@types/node": "^24.9.1",
+     "@vitest/coverage-v8": "^4.0.4",
+diff --git a/src/fetch.ts b/src/fetch.ts
+index 8e2fe436..10c91583 100644
+--- a/src/fetch.ts
++++ b/src/fetch.ts
+@@ -1,5 +1,4 @@
+ import type { Readable } from "node:stream";
+-import destr from "destr";
+ import { withBase, withQuery } from "./utils.url.ts";
+ import { createFetchError } from "./error.ts";
+ import {
+@@ -213,12 +212,13 @@ export function createFetch(globalOptions: CreateFetchOptions = {}): $Fetch {
+           : context.options.responseType) ||
+         detectResponseType(context.response.headers.get("content-type") || "");
+ 
+-      // We override the `.json()` method to parse the body more securely with `destr`
+       switch (responseType) {
+         case "json": {
+           const data = await context.response.text();
+-          const parseFunction = context.options.parseResponse || destr;
+-          context.response._data = parseFunction(data);
++          if (data) {
++            const parseFunction = context.options.parseResponse || JSON.parse;
++            context.response._data = parseFunction(data);
++          }
+           break;
+         }
+         case "stream": {
+diff --git a/test/index.test.ts b/test/index.test.ts
+index d3ebb291..5ac20b07 100644
+--- a/test/index.test.ts
++++ b/test/index.test.ts
+@@ -252,7 +252,7 @@ describe("ofetch", () => {
+ 
+   it("204 no content", async () => {
+     const res = await $fetch(getURL("204"));
+-    expect(res).toBe("");
++    expect(res).toBe(undefined);
+   });
+ 
+   it("HEAD no content", async () => {

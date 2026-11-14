@@ -1,0 +1,243 @@
+diff --git a/source/core/Ky.ts b/source/core/Ky.ts
+index 2f618b4b..70b45c45 100644
+--- a/source/core/Ky.ts
++++ b/source/core/Ky.ts
+@@ -667,14 +667,16 @@ export class Ky {
+ 		this.#startTime = typeof this.#options.totalTimeout === 'number' ? this.#getCurrentTime() : undefined;
+ 	}
+ 
+-	#calculateDelay(retry: InternalOptions['retry']): number {
++	#calculateDelay(retry: InternalOptions['retry'], error: unknown): number {
+ 		const retryDelay = retry.delay(this.#retryCount + 1);
+ 
+ 		// A `retry.delay` that does not return a usable number would turn every delay into `NaN`, which
+ 		// `setTimeout()` clamps to 1ms, silently disabling the configured backoff. The `jitter` function form
+ 		// already guards its own result, so the input is checked here for every jitter form.
+ 		if (typeof retryDelay !== 'number' || Number.isNaN(retryDelay) || retryDelay < 0) {
+-			throw new TypeError('`retry.delay` must return a non-negative number or `Infinity`');
++			// The failure that was being retried is chained as the cause, so `beforeError` can still inspect it
++			// instead of losing the response and data to this configuration mistake.
++			throw new TypeError('`retry.delay` must return a non-negative number or `Infinity`', {cause: error});
+ 		}
+ 
+ 		let jitteredDelay = retryDelay;
+@@ -706,7 +708,7 @@ export class Ky {
+ 
+ 		// Handle forced retry from afterResponse hook - skip method check and shouldRetry
+ 		if (isForceRetryError(errorObject)) {
+-			return errorObject.customDelay ?? this.#calculateDelay(retry);
++			return errorObject.customDelay ?? this.#calculateDelay(retry, error);
+ 		}
+ 
+ 		// Check if method is retriable for non-forced retries
+@@ -737,7 +739,7 @@ export class Ky {
+ 				throw error;
+ 			}
+ 
+-			return this.#calculateDelay(retry);
++			return this.#calculateDelay(retry, error);
+ 		}
+ 
+ 		// The `isHTTPError()` brand only checks `name`, so a cross-realm error may not carry a `response`.
+@@ -751,7 +753,7 @@ export class Ky {
+ 				const after = calculateRetryTimingDelay(retryTimingHeader);
+ 				if (after === undefined) {
+ 					// Malformed retry timing headers should not disable retries; they only lose their server-provided timing.
+-					return this.#calculateDelay(retry);
++					return this.#calculateDelay(retry, error);
+ 				}
+ 
+ 				// Don't apply jitter when server provides explicit retry timing
+@@ -762,7 +764,7 @@ export class Ky {
+ 				throw error;
+ 			}
+ 
+-			return this.#calculateDelay(retry);
++			return this.#calculateDelay(retry, error);
+ 		}
+ 
+ 		// Only retry known retriable error types. Unknown errors (e.g., programming bugs) are not retried.
+@@ -770,7 +772,7 @@ export class Ky {
+ 			throw error;
+ 		}
+ 
+-		return this.#calculateDelay(retry);
++		return this.#calculateDelay(retry, error);
+ 	}
+ 
+ 	#decorateResponse(response: Response): Response {
+@@ -1381,8 +1383,9 @@ export class Ky {
+ 					retryCount: this.#retryCount + 1,
+ 				}), this.#userProvidedAbortSignal);
+ 			} catch (hookError) {
+-				// Preserve the original request error path (`throw error`) so beforeError hooks can still run.
+-				if (hookError instanceof Error && hookError !== error) {
++				// Preserve the original request error path (`throw error`) so beforeError hooks can still run. `isError`
++				// rather than `instanceof`, so a cross-realm error is recognised the same way `#throwProcessedError` does.
++				if (isError(hookError) && hookError !== error) {
+ 					this.#beforeRetryHookErrors.add(hookError);
+ 				}
+ 
+diff --git a/test/hooks.ts b/test/hooks.ts
+index a25d9c01..15537011 100644
+--- a/test/hooks.ts
++++ b/test/hooks.ts
+@@ -7437,3 +7437,32 @@ test('a `ky.retry()` marker is recognised across Ky copies', async t => {
+ 	t.is(attempts, 3);
+ 	t.deepEqual(seenCodes, ['FOREIGN_COPY', 'FOREIGN_COPY']);
+ });
++
++// `#beforeRetryHookErrors` decided with `instanceof Error` while `#throwProcessedError` decided with the realm-safe `isError`, so a cross-realm error thrown by a `beforeRetry` hook reached the `beforeError` hooks while an identical same-realm error did not, contradicting "Ky will not handle it in any way".
++test('a cross-realm error from a `beforeRetry` hook skips the `beforeError` hooks', async t => {
++	const foreignError = runInNewContext('new Error("from a beforeRetry hook")') as Error;
++
++	for (const [label, thrown] of [
++		['same realm', new Error('from a beforeRetry hook')],
++		['another realm', foreignError],
++	] as Array<[string, Error]>) {
++		const seen: string[] = [];
++
++		// eslint-disable-next-line no-await-in-loop
++		const error = await t.throwsAsync(ky('https://example.com', {
++			retry: {limit: 1, delay: () => 0},
++			fetch: async () => new Response('server error', {status: 500}),
++			hooks: {
++				beforeRetry: [() => {
++					throw thrown;
++				}],
++				beforeError: [({error: hookError}) => {
++					seen.push(hookError.message);
++				}],
++			},
++		}).text());
++
++		t.is(error, thrown, label);
++		t.deepEqual(seen, [], `${label}: the hook error must propagate unchanged`);
++	}
++});
+diff --git a/test/main.ts b/test/main.ts
+index d24b825c..a59f2b23 100644
+--- a/test/main.ts
++++ b/test/main.ts
+@@ -4269,21 +4269,37 @@ test('mutating a caller-owned `context` object after creating an instance does n
+ test('a body shortcut called after dispatch does not advertise its media type on the retry', async t => {
+ 	const accepts: string[] = [];
+ 	let attempts = 0;
++	let markBeforeRetry: () => void;
++	let releaseBeforeRetry: () => void;
++
++	// The `beforeRetry` hook gates the retry, so the shortcut is guaranteed to be called while `ky.request` is the clone prepared for that retry rather than racing a timer against it.
++	const beforeRetryStarted = new Promise<void>(resolve => {
++		markBeforeRetry = resolve;
++	});
++	const beforeRetryGate = new Promise<void>(resolve => {
++		releaseBeforeRetry = resolve;
++	});
+ 
+ 	const promise = ky('https://example.com', {
+-		retry: {limit: 1, delay: () => 20},
++		retry: {limit: 1, delay: () => 0},
+ 		async fetch(request) {
+ 			attempts++;
+ 			accepts.push(request.headers.get('accept') ?? 'none');
+ 			return attempts === 1 ? new Response('{"ok":true}', {status: 500}) : new Response('{"ok":true}');
+ 		},
++		hooks: {
++			beforeRetry: [async () => {
++				markBeforeRetry!();
++				await beforeRetryGate;
++			}],
++		},
+ 	});
+ 
+-	// Dispatch the first attempt, then ask for JSON while the retry delay is still running.
+-	await new Promise(resolve => {
+-		setTimeout(resolve, 5);
+-	});
+-	t.is(JSON.stringify(await promise.json()), '{"ok":true}');
++	await beforeRetryStarted;
++	// `.json()` sets the Accept header synchronously, before it awaits the request.
++	const jsonPromise = promise.json();
++	releaseBeforeRetry!();
++	t.is(JSON.stringify(await jsonPromise), '{"ok":true}');
+ 
+ 	t.is(attempts, 2);
+ 	t.deepEqual(accepts, ['none', 'none']);
+diff --git a/test/retry.ts b/test/retry.ts
+index 7e371a22..b5228437 100644
+--- a/test/retry.ts
++++ b/test/retry.ts
+@@ -5144,7 +5144,7 @@ test('a TimeoutError names the request that was actually sent', async t => {
+ 	const error = await t.throwsAsync(ky.post('https://example.com', {
+ 		body: 'payload',
+ 		retry: {limit: 2, delay: () => 5000, methods: ['post']},
+-		totalTimeout: 300,
++		totalTimeout: 2000,
+ 		async fetch(request) {
+ 			attempts++;
+ 			sentRequest = request;
+@@ -5162,8 +5162,9 @@ test('a TimeoutError raised while retrying names the request that was actually s
+ 	let attempts = 0;
+ 
+ 	const error = await t.throwsAsync(ky.get('https://example.com', {
+-		retry: {limit: 20, delay: () => 30},
+-		totalTimeout: 300,
++		// A budget that comfortably fits several attempts, so the check is about which request is named rather than about how many retries fit in the window.
++		retry: {limit: 100, delay: () => 20},
++		totalTimeout: 800,
+ 		async fetch(request) {
+ 			attempts++;
+ 			sentRequests.push(request);
+@@ -5174,3 +5175,52 @@ test('a TimeoutError raised while retrying names the request that was actually s
+ 	t.true(attempts > 1, `the request should have been retried before the budget ran out, got ${attempts}`);
+ 	t.is((error as {request: Request}).request, sentRequests.at(-1));
+ });
++
++// A `retry.delay` that does not return a usable number is a configuration mistake, but it happens on the retry-decision path, so the `HTTPError` that was being retried would otherwise be lost. It is chained as the cause so `beforeError` can still reach it.
++test('a bad `retry.delay` result keeps the original error as the cause', async t => {
++	const seen: Array<{name: string; causeName: string; causeStatus: number}> = [];
++
++	const error = await t.throwsAsync(ky('https://example.com', {
++		fetch: async () => new Response('server error', {status: 500}),
++		retry: {limit: 1, delay: () => Number.NaN},
++		hooks: {
++			beforeError: [({error}) => {
++				const {cause} = error as {cause?: {name?: string; response?: {status?: number}}};
++				seen.push({
++					name: error.name,
++					causeName: String(cause?.name),
++					causeStatus: cause?.response?.status ?? 0,
++				});
++			}],
++		},
++	}).text(), {
++		name: 'TypeError',
++		message: '`retry.delay` must return a non-negative number or `Infinity`',
++	});
++
++	t.deepEqual(seen, [{name: 'TypeError', causeName: 'HTTPError', causeStatus: 500}]);
++	t.is((error as {cause?: {name?: string}}).cause?.name, 'HTTPError');
++});
++
++// A `jitter` function that returns a bad value falls back to the unjittered delay, which is the safe reading: the caller still gets a backoff rather than a 1ms retry.
++test.serial('a `retry.jitter` function that returns a bad value falls back to the computed delay', async t => {
++	for (const value of [Number.NaN, -1, Number.NEGATIVE_INFINITY]) {
++		let requestCount = 0;
++
++		// eslint-disable-next-line no-await-in-loop
++		await withCapturedTimeouts(async scheduledDelays => {
++			await t.throwsAsync(ky('https://example.com', {
++				retry: {limit: 1, delay: () => 10, jitter: () => value as number},
++				async fetch() {
++					requestCount++;
++					return new Response(null, {status: 500});
++				},
++			}).text());
++
++			t.true(scheduledDelays.includes(10), `jitter returning ${value} should keep the 10ms delay`);
++			t.false(scheduledDelays.includes(Number.NaN), `jitter returning ${value} must not schedule a 1ms delay`);
++		});
++
++		t.is(requestCount, 2);
++	}
++});

@@ -1,0 +1,270 @@
+diff --git a/src/black/brackets.py b/src/black/brackets.py
+index 5bdcf92f1d7..38f806cdf09 100644
+--- a/src/black/brackets.py
++++ b/src/black/brackets.py
+@@ -282,9 +282,9 @@ def is_split_before_delimiter(leaf: Leaf, previous: Leaf | None = None) -> Prior
+         return COMPARATOR_PRIORITY
+ 
+     if (
+-        leaf.type == token.STRING
++        leaf.type in {token.STRING, token.FSTRING_START, token.TSTRING_START}
+         and previous is not None
+-        and previous.type == token.STRING
++        and previous.type in {token.STRING, token.FSTRING_END, token.TSTRING_END}
+     ):
+         return STRING_PRIORITY
+ 
+diff --git a/src/black/linegen.py b/src/black/linegen.py
+index e8c00fbc609..1ef1d55a499 100644
+--- a/src/black/linegen.py
++++ b/src/black/linegen.py
+@@ -276,23 +276,33 @@ def visit_stmt(
+     def visit_dictsetmaker(self, node: Node) -> Iterator[Line]:
+         if Preview.wrap_long_dict_values_in_parens in self.mode:
+             for i, child in enumerate(node.children):
+-                if i == 0:
++                if not child.prev_sibling or child.prev_sibling.type != token.COLON:
+                     continue
+-                if node.children[i - 1].type == token.COLON:
+-                    if (
+-                        child.type == syms.atom
+-                        and child.children[0].type in OPENING_BRACKETS
+-                        and not is_walrus_assignment(child)
++
++                if not is_walrus_assignment(child):
++                    maybe_make_parens_invisible_in_atom(
++                        child,
++                        parent=node,
++                        mode=self.mode,
++                        features=self.features,
++                        remove_brackets_around_comma=False,
++                    )
++
++                key = node.children[i - 2]
++                if max_delimiter_priority(child.children) > 0 or (
++                    # Allow parens around the value if otherwise the key would split
++                    key and max_delimiter_priority(key.children) > 0
++                ):
++                    while (
++                        child
++                        and len(child.children) == 3
++                        and is_lpar_token(child.children[0])
++                        and is_rpar_token(child.children[-1])
+                     ):
+-                        maybe_make_parens_invisible_in_atom(
+-                            child,
+-                            parent=node,
+-                            mode=self.mode,
+-                            features=self.features,
+-                            remove_brackets_around_comma=False,
+-                        )
+-                    else:
+-                        wrap_in_parentheses(node, child, visible=False, index=i)
++                        child = child.children[1]
++
++                    wrap_in_parentheses(node, child, visible=False, index=i)
++
+         yield from self.visit_default(node)
+ 
+     def visit_funcdef(self, node: Node) -> Iterator[Line]:
+diff --git a/src/black/lines.py b/src/black/lines.py
+index fb27e355c24..445c3097599 100644
+--- a/src/black/lines.py
++++ b/src/black/lines.py
+@@ -1473,7 +1473,11 @@ def is_line_short_enough(line: Line, *, mode: Mode, line_str: str = "") -> bool:
+ 
+         if is_multiline_string(leaf):
+             if leaf.parent and (
+-                leaf.parent.type == syms.test
++                (
++                    leaf.parent.type in {syms.test, syms.dictsetmaker}
++                    if Preview.wrap_long_dict_values_in_parens in mode
++                    else leaf.parent.type == syms.test
++                )
+                 or (leaf.parent.parent and leaf.parent.parent.type == syms.dictsetmaker)
+             ):
+                 # Keep ternary and dictionary values parenthesized
+diff --git a/tests/data/cases/preview_long_dict_values.py b/tests/data/cases/preview_long_dict_values.py
+index 7704a547a5e..870b16c6cbf 100644
+--- a/tests/data/cases/preview_long_dict_values.py
++++ b/tests/data/cases/preview_long_dict_values.py
+@@ -1,8 +1,6 @@
+ # flags: --preview
+ x = {
+-    "xx_xxxxx_xxxxxxxxxx_xxxxxxxxx_xx": (
+-        "xx:xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxxx{xx}xxx_xxxxx_xxxxxxxxx_xxxxxxxxxxxx_xxxx"
+-    )
++    "xx_xxxxx_xxxxxxxxxx_xxxxxxxxx_xx": "xx:xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxxx{xx}xxx_xxxxx_xxxxxxxxx_xxxxxxxxxxxx_xxxx"
+ }
+ x = {
+     "xx_xxxxx_xxxxxxxxxx_xxxxxxxxx_xx": (
+@@ -19,6 +17,18 @@
+ x = {
+     "xx_xxxxx_xxxxxxxxxx_xxxxxxxxx_xx": "xx:xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxx"
+ }
++{
++    "url": f"{SF_PROJECTS}/libpng/files/libpng{V['libpng-xy']}/{V['libpng']}/"
++    f"FILENAME/download",
++    "url": "{SF_PROJECTS}/libpng/files/libpng{V['libpng-xy']}/{V['libpng']}/"
++    f"FILENAME/download",
++    "url": f"{SF_PROJECTS}/libpng/files/libpng{V['libpng-xy']}/{V['libpng']}/"
++    "FILENAME/download",
++    "url": "{SF_PROJECTS}/libpng/files/libpng{V['libpng-xy']}/{V['libpng']}/"
++    "FILENAME/download",
++}
++{"a":"""
++"""}
+ 
+ my_dict = {
+     "something_something":
+@@ -46,9 +56,7 @@
+ 
+ # Dictionary comprehensions
+ tasks = {
+-    key_name: (
+-        xx_xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxxxxxx_xxxxx_xxxxxxxxx_xxxxxxxxxxxx_xxxx
+-    )
++    key_name: xx_xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxxxxxx_xxxxx_xxxxxxxxx_xxxxxxxxxxxx_xxxx
+     for src in sources
+ }
+ tasks = {key_name: foobar for src in sources}
+@@ -125,6 +133,27 @@ def bar():
+ }
+ 
+ 
++class Foo:
++    def test_apply_nanoseconds(self):
++        tests = [
++            (
++                BusinessHour(),
++                {
++                    Timestamp("2014-07-04 15:00") + Nano(5): Timestamp(
++                        "2014-07-04 16:00"
++                    ) + Nano(5),
++                    Timestamp("2014-07-04 16:00") + Nano(5):Timestamp(
++                         "2014-07-07 09:00"
++                    )+Nano(5),
++                    Timestamp("2014-07-04 16:00") - Nano(5): Timestamp(
++                        "2014-07-04 17:00"
++                    )
++                    - Nano(5),
++                },
++            ),
++        ]
++
++
+ class Random:
+     def func():
+         random_service.status.active_states.inactive = (
+@@ -162,9 +191,7 @@ def __init__(self) -> None:
+ 
+ # output
+ x = {
+-    "xx_xxxxx_xxxxxxxxxx_xxxxxxxxx_xx": (
+-        "xx:xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxxx{xx}xxx_xxxxx_xxxxxxxxx_xxxxxxxxxxxx_xxxx"
+-    )
++    "xx_xxxxx_xxxxxxxxxx_xxxxxxxxx_xx": "xx:xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxxx{xx}xxx_xxxxx_xxxxxxxxx_xxxxxxxxxxxx_xxxx"
+ }
+ x = {
+     "xx_xxxxx_xxxxxxxxxx_xxxxxxxxx_xx": (
+@@ -181,6 +208,28 @@ def __init__(self) -> None:
+ x = {
+     "xx_xxxxx_xxxxxxxxxx_xxxxxxxxx_xx": "xx:xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxx"
+ }
++{
++    "url": (
++        f"{SF_PROJECTS}/libpng/files/libpng{V['libpng-xy']}/{V['libpng']}/"
++        f"FILENAME/download"
++    ),
++    "url": (
++        "{SF_PROJECTS}/libpng/files/libpng{V['libpng-xy']}/{V['libpng']}/"
++        f"FILENAME/download"
++    ),
++    "url": (
++        f"{SF_PROJECTS}/libpng/files/libpng{V['libpng-xy']}/{V['libpng']}/"
++        "FILENAME/download"
++    ),
++    "url": (
++        "{SF_PROJECTS}/libpng/files/libpng{V['libpng-xy']}/{V['libpng']}/"
++        "FILENAME/download"
++    ),
++}
++{
++    "a": """
++"""
++}
+ 
+ my_dict = {
+     "something_something": (
+@@ -209,9 +258,7 @@ def __init__(self) -> None:
+ 
+ # Dictionary comprehensions
+ tasks = {
+-    key_name: (
+-        xx_xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxxxxxx_xxxxx_xxxxxxxxx_xxxxxxxxxxxx_xxxx
+-    )
++    key_name: xx_xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxxxxxx_xxxxx_xxxxxxxxx_xxxxxxxxxxxx_xxxx
+     for src in sources
+ }
+ tasks = {key_name: foobar for src in sources}
+@@ -300,6 +347,26 @@ def bar():
+ }
+ 
+ 
++class Foo:
++    def test_apply_nanoseconds(self):
++        tests = [
++            (
++                BusinessHour(),
++                {
++                    Timestamp("2014-07-04 15:00") + Nano(5): (
++                        Timestamp("2014-07-04 16:00") + Nano(5)
++                    ),
++                    Timestamp("2014-07-04 16:00") + Nano(5): (
++                        Timestamp("2014-07-07 09:00") + Nano(5)
++                    ),
++                    Timestamp("2014-07-04 16:00") - Nano(5): (
++                        Timestamp("2014-07-04 17:00") - Nano(5)
++                    ),
++                },
++            ),
++        ]
++
++
+ class Random:
+     def func():
+         random_service.status.active_states.inactive = (
+diff --git a/tests/data/cases/preview_long_strings.py b/tests/data/cases/preview_long_strings.py
+index ee1516cdaea..de2d7c89725 100644
+--- a/tests/data/cases/preview_long_strings.py
++++ b/tests/data/cases/preview_long_strings.py
+@@ -954,9 +954,7 @@ def foo():
+     )
+ }
+ x = {
+-    "xx_xxxxx_xxxxxxxxxx_xxxxxxxxx_xx": (
+-        "xx:xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxxx{xx}xxx_xxxxx_xxxxxxxxx_xxxxxxxxxxxx_xxxx"
+-    ),
++    "xx_xxxxx_xxxxxxxxxx_xxxxxxxxx_xx": "xx:xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxxx{xx}xxx_xxxxx_xxxxxxxxx_xxxxxxxxxxxx_xxxx",
+ }
+ x = {
+     "xx_xxxxx_xxxxxxxxxx_xxxxxxxxx_xx": "xx:xxxxxxxxxxxxxxxxx_xxxxx_xxxxxxx_xxxxxxxxxx"
+diff --git a/tests/data/cases/preview_tstrings.py b/tests/data/cases/preview_tstrings.py
+new file mode 100644
+index 00000000000..f92e5ad0484
+--- /dev/null
++++ b/tests/data/cases/preview_tstrings.py
+@@ -0,0 +1,13 @@
++# flags: --preview --minimum-version=3.14
++{
++    "url": t"{SF_PROJECTS}/libpng/files/libpng{V['libpng-xy']}/{V['libpng']}/"
++    t"FILENAME/download",
++}
++
++# output
++{
++    "url": (
++        t"{SF_PROJECTS}/libpng/files/libpng{V['libpng-xy']}/{V['libpng']}/"
++        t"FILENAME/download"
++    ),
++}

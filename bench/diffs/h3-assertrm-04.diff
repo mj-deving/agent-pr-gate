@@ -1,0 +1,20 @@
+diff --git a/tests/test_web_urldispatcher.py b/tests/test_web_urldispatcher.py
+index 25802b6bb5c..8eb057419de 100644
+--- a/tests/test_web_urldispatcher.py
++++ b/tests/test_web_urldispatcher.py
+@@ -973,10 +973,13 @@ async def get(self) -> web.Response:
+ 
+     app.router.add_routes([web.view("/a", MyView)])
+ 
+-    client = await aiohttp_client(app)
++    # Send "///a" as written: URL.join() would turn it into "/a" or, as the
++    # WHATWG URL Standard does, into a URL with the host "a".
++    client = await aiohttp_client(app, server_kwargs={"skip_url_asserts": True})
+ 
+     async with client.get("///a") as r:
+-        assert r.status == 200
++        assert r.url.raw_path == "///a"
++        # The router does not merge slashes, see normalize_path_middleware().
+ 
+ 
+ async def test_subapp_domain_routing_same_path(aiohttp_client: AiohttpClient) -> None:

@@ -1,0 +1,110 @@
+diff --git a/packages/create-vite/__tests__/cli.spec.ts b/packages/create-vite/__tests__/cli.spec.ts
+index d885c6609dbfa9..6839b6cd630889 100644
+--- a/packages/create-vite/__tests__/cli.spec.ts
++++ b/packages/create-vite/__tests__/cli.spec.ts
+@@ -13,11 +13,14 @@ const genPathWithSubfolder = path.join(
+   projectName,
+ )
+ 
+-const run = (args: string[], options?: { cwd?: string }) => {
++const run = (
++  args: string[],
++  options?: { cwd?: string; env?: NodeJS.ProcessEnv },
++) => {
+   return xSync('node', [CLI_PATH, ...args], {
+     throwOnError: true,
+     nodeOptions: {
+-      env: { ...process.env, _VITE_TEST_CLI: 'true' },
++      env: { ...process.env, _VITE_TEST_CLI: 'true', ...options?.env },
+       cwd: options?.cwd,
+     },
+   })
+@@ -386,6 +389,39 @@ test('accepts immediate flag', () => {
+   expect(stdout).toContain('Installing dependencies')
+ })
+ 
++test('uses vp commands in the done message when run via vp dlx', () => {
++  const { stdout } = run([projectName, '--template', 'vue', '--no-immediate'], {
++    cwd: import.meta.dirname,
++    env: {
++      // `vp dlx` sets VP_USER_AGENT; the underlying package manager overwrites
++      // npm_config_user_agent, so VP_USER_AGENT must take precedence.
++      VP_USER_AGENT: 'vp/1.6.0',
++      npm_config_user_agent: 'pnpm/10.0.0 npm/? node/v24.18.0 darwin arm64',
++    },
++  })
++  expect(stdout).toContain('Done. Now run:')
++  expect(stdout).toContain('vp install')
++  expect(stdout).toContain('vp run dev')
++})
++
++for (const vpUserAgent of [undefined, '']) {
++  test(`uses npm_config_user_agent when VP_USER_AGENT is ${vpUserAgent}`, () => {
++    const { stdout } = run(
++      [projectName, '--template', 'vue', '--no-immediate'],
++      {
++        cwd: import.meta.dirname,
++        env: {
++          VP_USER_AGENT: vpUserAgent,
++          npm_config_user_agent: 'pnpm/10.0.0 npm/? node/v24.18.0 darwin arm64',
++        },
++      },
++    )
++    expect(stdout).toContain('pnpm install')
++    expect(stdout).toContain('pnpm dev')
++    expect(stdout).not.toContain('vp install')
++  })
++}
++
+ test('accepts immediate flag and skips install prompt', () => {
+   const { stdout } = run([projectName, '--template', 'vue', '--no-immediate'], {
+     cwd: import.meta.dirname,
+diff --git a/packages/create-vite/src/index.ts b/packages/create-vite/src/index.ts
+index 981b340bb3f63a..59a13647cc2a27 100755
+--- a/packages/create-vite/src/index.ts
++++ b/packages/create-vite/src/index.ts
+@@ -493,7 +493,11 @@ async function init() {
+     )
+   }
+ 
+-  const pkgInfo = pkgFromUserAgent(process.env.npm_config_user_agent)
++  // Vite+ (`vp`) exposes its own `VP_USER_AGENT` because the underlying package
++  // manager overwrites `npm_config_user_agent` when running `vp dlx create-vite`.
++  const pkgInfo = pkgFromUserAgent(
++    process.env.VP_USER_AGENT || process.env.npm_config_user_agent,
++  )
+   const cancel = () => prompts.cancel('Operation cancelled')
+ 
+   // 1. Get project name and target dir
+@@ -1190,6 +1194,10 @@ function getFullCustomCommand(customCommand: string, pkgInfo?: PkgInfo) {
+         if (pkgManager === 'pnpm') {
+           return 'pnpm create '
+         }
++        // Vite+ uses `vp dlx create-` directly on the package
++        if (pkgManager === 'vp') {
++          return 'vp dlx create-'
++        }
+         // For other package managers, preserve the original format
+         return customCommand.startsWith('npm create -- ')
+           ? `${pkgManager} create -- `
+@@ -1215,6 +1223,10 @@ function getFullCustomCommand(customCommand: string, pkgInfo?: PkgInfo) {
+         if (pkgManager === 'deno') {
+           return 'deno run -A npm:'
+         }
++        // Vite+ uses `vp dlx` to execute package binaries
++        if (pkgManager === 'vp') {
++          return 'vp dlx '
++        }
+         // Use `npm exec` in all other cases,
+         // including Yarn 1.x and other custom npm clients.
+         return customCommand.startsWith('npm exec -- ')
+@@ -1249,6 +1261,9 @@ function getRunCommand(agent: string, script: string) {
+       return [agent, script]
+     case 'deno':
+       return [agent, 'task', script]
++    // `vp dev` runs the Vite+ built-in dev server and ignores the `dev` script,
++    // so Vite+ needs `vp run dev` to run the script like other package managers
++    case 'vp':
+     default:
+       return [agent, 'run', script]
+   }

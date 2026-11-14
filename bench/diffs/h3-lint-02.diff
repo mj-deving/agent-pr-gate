@@ -1,0 +1,32 @@
+diff --git a/playground/index.mjs b/playground/index.mjs
+deleted file mode 100644
+index c304c9ad..00000000
+--- a/playground/index.mjs
++++ /dev/null
+@@ -1,12 +0,0 @@
+-import { $fetch } from "..";
+-
+-async function main() {
+-  await $fetch("http://google.com/404");
+-}
+-
+-// eslint-disable-next-line unicorn/prefer-top-level-await
+-main().catch((error) => {
+-  console.error(error);
+-  // eslint-disable-next-line unicorn/no-process-exit
+-  process.exit(1);
+-});
+diff --git a/playground/index.ts b/test/playground.ts
+similarity index 90%
+rename from playground/index.ts
+rename to test/playground.ts
+index 5bca695d..f2d84067 100644
+--- a/playground/index.ts
++++ b/test/playground.ts
+@@ -1,4 +1,5 @@
+-import { $fetch } from "../src/node";
++import { $fetch } from "../src/index.ts";
+ 
++// eslint-disable-next-line unicorn/prefer-top-level-await
+ async function main() {
+   // const r = await $fetch<string>('http://google.com/404')

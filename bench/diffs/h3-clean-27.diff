@@ -1,0 +1,38 @@
+diff --git a/aiohttp/test_utils.py b/aiohttp/test_utils.py
+index abe45cee65a..ee2995c1594 100644
+--- a/aiohttp/test_utils.py
++++ b/aiohttp/test_utils.py
+@@ -603,8 +603,13 @@ def make_mocked_request(
+ 
+     if headers:
+         headers = HeadersDictProxy(CIMultiDict(headers))
++        # The parsers decode headers with surrogateescape; this is the inverse.
+         raw_hdrs = tuple(
+-            (k.encode("utf-8"), v.encode("utf-8")) for k, v in headers.items()
++            (
++                k.encode("utf-8", "surrogateescape"),
++                v.encode("utf-8", "surrogateescape"),
++            )
++            for k, v in headers.items()
+         )
+     else:
+         headers = HeadersDictProxy(CIMultiDict())
+diff --git a/fuzzers/web_request.py b/fuzzers/web_request.py
+index 3d430678e15..c271c89be40 100644
+--- a/fuzzers/web_request.py
++++ b/fuzzers/web_request.py
+@@ -35,9 +35,11 @@ async def fuzz_run_one_async(data: bytes) -> None:  # type: ignore[misc]
+     except ValueError:
+         return
+ 
+-    headers = CIMultiDict(
+-        {fdp.ConsumeString(20): fdp.ConsumeString(fdp.ConsumeIntInRange(0, 512))}
+-    )
++    # Decode like the parsers do, so that non-UTF-8 header bytes are covered.
++    name = fdp.ConsumeBytes(20).decode("utf-8", "surrogateescape")
++    value_len = fdp.ConsumeIntInRange(0, 512)
++    value = fdp.ConsumeBytes(value_len).decode("utf-8", "surrogateescape")
++    headers = CIMultiDict({name: value})
+     req = make_mocked_request("GET", url_s, headers=headers)
+ 
+     req.forwarded

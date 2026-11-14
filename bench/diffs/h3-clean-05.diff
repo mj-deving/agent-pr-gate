@@ -1,0 +1,51 @@
+diff --git a/src/fetch.ts b/src/fetch.ts
+index 691cb387..7745b69d 100644
+--- a/src/fetch.ts
++++ b/src/fetch.ts
+@@ -169,18 +169,13 @@ export function createFetch(globalOptions: CreateFetchOptions = {}): $Fetch {
+ 
+     let abortTimeout: NodeJS.Timeout | undefined;
+ 
+-    // TODO: Can we merge signals?
+-    if (!context.options.signal && context.options.timeout) {
+-      const controller = new AbortController();
+-      abortTimeout = setTimeout(() => {
+-        const error = new Error(
+-          "[TimeoutError]: The operation was aborted due to timeout"
+-        );
+-        error.name = "TimeoutError";
+-        (error as any).code = 23; // DOMException.TIMEOUT_ERR
+-        controller.abort(error);
+-      }, context.options.timeout);
+-      context.options.signal = controller.signal;
++    if (context.options.timeout) {
++      context.options.signal = context.options.signal
++        ? AbortSignal.any([
++            AbortSignal.timeout(context.options.timeout),
++            context.options.signal,
++          ])
++        : AbortSignal.timeout(context.options.timeout);
+     }
+ 
+     try {
+diff --git a/test/index.test.ts b/test/index.test.ts
+index bd1a8efe..d3ebb291 100644
+--- a/test/index.test.ts
++++ b/test/index.test.ts
+@@ -512,5 +512,16 @@ describe("ofetch", () => {
+     expect(options).toStrictEqual({
+       headers: expect.any(Headers),
+     });
++    fetch.mockReset();
++    await $fetch("https://jsonplaceholder.typicode.com/todos/1", {
++      timeout: 10_000,
++    });
++    expect(fetch).toHaveBeenCalledOnce();
++    const options2 = fetch.mock.calls[0][1];
++    expect(options2).toStrictEqual({
++      headers: expect.any(Headers),
++      signal: expect.any(AbortSignal),
++      timeout: 10_000,
++    });
+   });
+ });

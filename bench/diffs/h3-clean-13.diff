@@ -1,0 +1,160 @@
+diff --git a/packages/vite/src/node/plugins/css.ts b/packages/vite/src/node/plugins/css.ts
+index ee2a8d9703c7e8..845901cfbf7d8e 100644
+--- a/packages/vite/src/node/plugins/css.ts
++++ b/packages/vite/src/node/plugins/css.ts
+@@ -1424,6 +1424,9 @@ export function createCSSResolvers(
+         conditions: ['style', DEV_PROD_CONDITION],
+         tryIndex: false,
+         preferRelative: true,
++        // Avoid automatic externalization when resolving CSS imports.
++        // A regexp preserves the default handling of Node.js built-ins.
++        noExternal: [/./],
+       }))
+     },
+ 
+@@ -1437,6 +1440,7 @@ export function createCSSResolvers(
+           tryPrefix: '_',
+           preferRelative: true,
+           skipMainField: true,
++          noExternal: [/./],
+         })
+         sassResolve = async (...args) => {
+           // the modern API calls `canonicalize` with resolved file URLs
+@@ -1463,6 +1467,7 @@ export function createCSSResolvers(
+         conditions: ['less', 'style', DEV_PROD_CONDITION],
+         tryIndex: false,
+         preferRelative: true,
++        noExternal: [/./],
+       }))
+     },
+   }
+diff --git a/playground/ssr-css/__tests__/ssr-css.spec.ts b/playground/ssr-css/__tests__/ssr-css.spec.ts
+new file mode 100644
+index 00000000000000..76e8c1fc673c9a
+--- /dev/null
++++ b/playground/ssr-css/__tests__/ssr-css.spec.ts
+@@ -0,0 +1,9 @@
++import { expect, test } from 'vitest'
++import { getColor, page, viteTestUrl } from '~utils'
++
++for (const lang of ['css', 'sass', 'less']) {
++  test(`${lang} package import in SSR`, async () => {
++    await page.goto(viteTestUrl)
++    expect(await getColor(`.${lang}-dep`)).toBe('green')
++  })
++}
+diff --git a/playground/ssr-css/css-dep/index.js b/playground/ssr-css/css-dep/index.js
+new file mode 100644
+index 00000000000000..336ce12bb9106a
+--- /dev/null
++++ b/playground/ssr-css/css-dep/index.js
+@@ -0,0 +1 @@
++export {}
+diff --git a/playground/ssr-css/css-dep/package.json b/playground/ssr-css/css-dep/package.json
+new file mode 100644
+index 00000000000000..2d160a46358ce6
+--- /dev/null
++++ b/playground/ssr-css/css-dep/package.json
+@@ -0,0 +1,14 @@
++{
++  "name": "@vitejs/test-ssr-css-dep",
++  "private": true,
++  "version": "1.0.0",
++  "type": "module",
++  "exports": {
++    ".": {
++      "sass": "./style.scss",
++      "less": "./style.less",
++      "style": "./style.css",
++      "default": "./index.js"
++    }
++  }
++}
+diff --git a/playground/ssr-css/entry-server.js b/playground/ssr-css/entry-server.js
+new file mode 100644
+index 00000000000000..a367ce1b055792
+--- /dev/null
++++ b/playground/ssr-css/entry-server.js
+@@ -0,0 +1,15 @@
++import style from './index.css?inline'
++import template from './index.html?raw'
++import lessStyle from './index.less?inline'
++import sassStyle from './index.scss?inline'
++
++export default function render(req, res, next) {
++  if (req.url !== '/') return next()
++
++  const html = template.replace(
++    '<!--head-->',
++    `<style>${style}${sassStyle}${lessStyle}</style>`,
++  )
++  res.setHeader('Content-Type', 'text/html')
++  res.end(html)
++}
+diff --git a/playground/ssr-css/package.json b/playground/ssr-css/package.json
+new file mode 100644
+index 00000000000000..9f415cd0aa4dfc
+--- /dev/null
++++ b/playground/ssr-css/package.json
+@@ -0,0 +1,16 @@
++{
++  "name": "@vitejs/test-ssr-css",
++  "private": true,
++  "version": "0.0.0",
++  "type": "module",
++  "scripts": {
++    "dev": "vite",
++    "build": "vite build --app",
++    "preview": "vite preview"
++  },
++  "devDependencies": {
++    "@vitejs/test-ssr-css-dep": "file:./css-dep",
++    "less": "^4.9.1",
++    "sass": "^1.108.1"
++  }
++}
+diff --git a/playground/ssr-css/vite.config.js b/playground/ssr-css/vite.config.js
+new file mode 100644
+index 00000000000000..7b1b9cfd9ab35b
+--- /dev/null
++++ b/playground/ssr-css/vite.config.js
+@@ -0,0 +1,39 @@
++import path from 'node:path'
++import { defineConfig } from 'vite'
++
++export default defineConfig({
++  appType: 'custom',
++  plugins: [
++    {
++      name: 'ssr-middleware',
++      configureServer(server) {
++        server.middlewares.use(async (req, res, next) => {
++          try {
++            const { default: render } =
++              await server.ssrLoadModule('/entry-server.js')
++            render(req, res, next)
++          } catch (error) {
++            next(error)
++          }
++        })
++      },
++      async configurePreviewServer(server) {
++        const { default: render } = await import(
++          new URL('./dist/ssr/entry-server.js', import.meta.url).href
++        )
++        server.middlewares.use(render)
++      },
++    },
++  ],
++  builder: {},
++  environments: {
++    ssr: {
++      build: {
++        outDir: 'dist/ssr',
++        rolldownOptions: {
++          input: path.join(import.meta.dirname, 'entry-server.js'),
++        },
++      },
++    },
++  },
++})

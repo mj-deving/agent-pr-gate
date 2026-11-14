@@ -1,0 +1,26 @@
+diff --git a/src/language-js/parentheses/needs-parentheses.js b/src/language-js/parentheses/needs-parentheses.js
+index 426a29316eec..6e94bb48116b 100644
+--- a/src/language-js/parentheses/needs-parentheses.js
++++ b/src/language-js/parentheses/needs-parentheses.js
+@@ -66,6 +66,7 @@ function needsParentheses(path, options) {
+     node.type === "FunctionExpression" ||
+     node.type === "ClassExpression" ||
+     node.type === "DoExpression" ||
++    node.type === "MatchExpression" ||
+     (node.type === "UnaryExpression" && node.operator === "throw")
+   ) {
+     const expression = path.findAncestor(
+diff --git a/tests/format/flow/match/parentheses.js b/tests/format/flow/match/parentheses.js
+new file mode 100644
+index 000000000000..d7894dcadb3b
+--- /dev/null
++++ b/tests/format/flow/match/parentheses.js
+@@ -0,0 +1,8 @@
++(match (x) {});
++(match (x) {}) || fallback;
++(match (x) {}).message;
++(match (x) {})();
++(match (x) {}) + 1;
++((match (x) {}), _);
++(_, (match (x) {}));
++_ = match (x) {};

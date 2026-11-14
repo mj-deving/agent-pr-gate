@@ -1,0 +1,216 @@
+diff --git a/pydantic_settings/sources/providers/nested_secrets.py b/pydantic_settings/sources/providers/nested_secrets.py
+index bfb20513..edc4ae3e 100644
+--- a/pydantic_settings/sources/providers/nested_secrets.py
++++ b/pydantic_settings/sources/providers/nested_secrets.py
+@@ -17,6 +17,7 @@
+ 
+ 
+ SECRETS_DIR_MAX_SIZE = 16 * 2**20  # 16 MiB seems to be a reasonable default
++SECRETS_DIR_MAX_ENTRIES = 10_000  # bounds the walk through repeated directory links
+ 
+ 
+ class NestedSecretsSettingsSource(EnvSettingsSource):
+@@ -142,9 +143,11 @@ def validate_secrets_path(self, path: Path) -> None:
+         else:
+             if not path.is_dir():
+                 raise SettingsError(f'secrets_dir must reference a directory, not a {path_type_label(path)}')
+-            secrets_dir_size = sum(f.stat().st_size for f in self._iter_secret_files(path))
+-            if secrets_dir_size > self.secrets_dir_max_size:
+-                raise SettingsError(f'secrets_dir size is above {self.secrets_dir_max_size} bytes')
++            secrets_dir_size = 0
++            for f in self._iter_secret_files(path):
++                secrets_dir_size += f.stat().st_size
++                if secrets_dir_size > self.secrets_dir_max_size:
++                    raise SettingsError(f'secrets_dir size is above {self.secrets_dir_max_size} bytes')
+ 
+     @staticmethod
+     def _iter_secret_files(path: Path) -> Iterator[Path]:
+@@ -157,42 +160,53 @@ def _iter_secret_files(path: Path) -> Iterator[Path]:
+           that resolve outside of it (e.g. through a symbolic link) are skipped, so
+           they neither contribute to the ``secrets_dir_max_size`` accounting nor get
+           loaded;
+-        * each real directory is visited at most once, so cyclic or repeated
+-          symlinks cannot make the walk loop and inflate the size accounting or the
+-          number of loaded secrets.
++        * a symbolic link back to a directory on the current recursion path is not
++          followed, so cyclic symlinks cannot make the walk loop. A directory reached
++          through several links (e.g. the ``..data`` link of a Kubernetes secret
++          volume) is walked under each of its names;
++        * hidden entries (names starting with ``.``) are skipped, as the recursive
++          glob used before did, so Kubernetes' ``..data`` and ``..<timestamp>``
++          directories are not loaded as secrets;
++        * at most ``SECRETS_DIR_MAX_ENTRIES`` entries are examined, so a tree of
++          links that multiplies the walk cannot make it run unbounded, even when it
++          holds no data for ``secrets_dir_max_size`` to catch.
+ 
+         Because the size check and the loader share this iterator, they always see
+         the same set of files.
+         """
+-        seen_dirs: set[Path] = set()
++        entries_seen = 0
+ 
+-        def walk(directory: Path) -> Iterator[Path]:
+-            # Guard against symlink loops / a directory reachable through multiple
+-            # links being traversed more than once.
+-            resolved_dir = directory.resolve()
+-            if resolved_dir in seen_dirs:
+-                return
+-            seen_dirs.add(resolved_dir)
++        def walk(directory: Path, ancestors: frozenset[Path]) -> Iterator[Path]:
++            nonlocal entries_seen
+             try:
+                 entries = sorted(directory.iterdir())
+             except OSError:
+                 return
+             for entry in entries:
+-                resolved = entry.resolve()
++                if entry.name.startswith('.'):
++                    continue
++                entries_seen += 1
++                if entries_seen > SECRETS_DIR_MAX_ENTRIES:
++                    raise SettingsError(f'secrets_dir has more than {SECRETS_DIR_MAX_ENTRIES} entries')
++                try:
++                    resolved = entry.resolve()
++                except (OSError, RuntimeError):
++                    # Python < 3.13 raises RuntimeError on a symlink loop
++                    continue
+                 if resolved.is_dir():
+                     # Only descend into directories that stay within secrets_dir.
+                     # A symlinked directory pointing outside of ``path`` is not
+                     # followed at all, so we never walk (potentially large) external
+                     # trees and never read files from outside secrets_dir.
+-                    if resolved == path or path in resolved.parents:
+-                        yield from walk(entry)
++                    if (resolved == path or path in resolved.parents) and resolved not in ancestors:
++                        yield from walk(entry, ancestors | {resolved})
+                 elif resolved.is_file() and path in resolved.parents:
+                     # Defense in depth: a file whose real location escapes
+                     # secrets_dir (e.g. a symlink pointing outside of ``path``) is
+                     # skipped from both the size accounting and the load.
+                     yield entry
+ 
+-        yield from walk(path)
++        yield from walk(path, frozenset({path}))
+ 
+     @classmethod
+     def load_secrets(cls, path: Path) -> dict[str, str]:
+diff --git a/tests/test_source_nested_secrets.py b/tests/test_source_nested_secrets.py
+index 530a7f26..bb29ff88 100644
+--- a/tests/test_source_nested_secrets.py
++++ b/tests/test_source_nested_secrets.py
+@@ -14,6 +14,7 @@
+     SettingsError,
+ )
+ from pydantic_settings.sources.providers import env as env_provider
++from pydantic_settings.sources.providers import nested_secrets
+ from pydantic_settings.sources.providers.nested_secrets import SECRETS_DIR_MAX_SIZE
+ 
+ 
+@@ -383,7 +384,7 @@ def test_cyclic_symlink_does_not_inflate_size(env, tmp_path):
+     A cyclic (or repeated) symlink inside ``secrets_dir`` must not cause the
+     directory walk to loop. Otherwise a single small file gets visited many times,
+     inflating the ``secrets_dir_max_size`` accounting (and the number of loaded
+-    secrets). Each real directory must be traversed at most once.
++    secrets). A link back to a directory being walked must not be followed.
+     """
+     env.set('DB__USER', 'user')
+ 
+@@ -444,6 +445,98 @@ def tracking_iterdir(self):
+     assert all(d == resolved_secrets or resolved_secrets in d.parents for d in walked), walked
+ 
+ 
++def _link_sorting_after_target(basedir: Path) -> None:
++    basedir.joinpath('a_random').mkdir()
++    basedir.joinpath('a_random', 'passwd').write_text('secret2')
++    basedir.joinpath('db').symlink_to('a_random', target_is_directory=True)
++
++
++def _kubernetes_volume(basedir: Path) -> None:
++    # what the kubelet writes: ..<timestamp>/db/passwd, ..data -> ..<timestamp>, db -> ..data/db
++    basedir.joinpath('..2026_10_16_00_00_00.123', 'db').mkdir(parents=True)
++    basedir.joinpath('..2026_10_16_00_00_00.123', 'db', 'passwd').write_text('secret2')
++    # Windows needs to be told these are directory links, the chained target is not detected as one
++    basedir.joinpath('..data').symlink_to('..2026_10_16_00_00_00.123', target_is_directory=True)
++    basedir.joinpath('db').symlink_to(Path('..data', 'db'), target_is_directory=True)
++
++
++@pytest.mark.parametrize('build', [_link_sorting_after_target, _kubernetes_volume])
++def test_second_link_to_subdir_is_loaded(build, env, tmp_path):
++    """A directory reached through a second link is loaded under that name too (#1061)."""
++    env.set('DB__USER', 'user')
++    build(tmp_path)
++
++    class Settings(AppSettings):
++        model_config = SettingsConfigDict(
++            secrets_dir=tmp_path,
++            env_nested_delimiter='__',
++            secrets_nested_subdir=True,
++        )
++
++    assert Settings().model_dump() == {
++        'app_key': None,
++        'db': {'user': 'user', 'passwd': 'secret2'},
++    }
++
++
++def test_second_link_is_loaded_after_unreadable_first_link(env, tmp_path, monkeypatch):
++    env.set('DB__USER', 'user')
++    _link_sorting_after_target(tmp_path)
++    real_iterdir = Path.iterdir
++
++    def iterdir(self: Path):
++        # the real directory cannot be listed under its first name, only through the link
++        if self == tmp_path / 'a_random':
++            raise PermissionError(str(self))
++        return real_iterdir(self)
++
++    monkeypatch.setattr(Path, 'iterdir', iterdir)
++
++    class Settings(AppSettings):
++        model_config = SettingsConfigDict(
++            secrets_dir=tmp_path,
++            env_nested_delimiter='__',
++            secrets_nested_subdir=True,
++        )
++
++    assert Settings().model_dump() == {
++        'app_key': None,
++        'db': {'user': 'user', 'passwd': 'secret2'},
++    }
++
++
++def test_hidden_entries_are_not_loaded(tmp_path):
++    _kubernetes_volume(tmp_path)
++    tmp_path.joinpath('.hidden').write_text('x')
++
++    assert NestedSecretsSettingsSource.load_secrets(tmp_path.resolve()) == {f'db{sep}passwd': 'secret2'}
++
++
++def test_symlink_loop_entry_is_skipped(tmp_path):
++    tmp_path.joinpath('token').write_text('secret')
++    tmp_path.joinpath('loop').symlink_to('loop')
++
++    assert NestedSecretsSettingsSource.load_secrets(tmp_path.resolve()) == {'token': 'secret'}
++
++
++def test_repeated_links_do_not_walk_unbounded(tmp_path, monkeypatch):
++    """Each level links twice to the next one, so the number of paths doubles per level.
++
++    The tree holds a single empty file, so ``secrets_dir_max_size`` cannot stop the walk.
++    """
++    monkeypatch.setattr(nested_secrets, 'SECRETS_DIR_MAX_ENTRIES', 100)
++    depth = 10
++    for i in range(depth):
++        tmp_path.joinpath(f'd{i}').mkdir()
++    for i in range(depth - 1):
++        for name in ('a', 'b'):
++            tmp_path.joinpath(f'd{i}', name).symlink_to(tmp_path / f'd{i + 1}')
++    tmp_path.joinpath(f'd{depth - 1}', 'x').write_text('')
++
++    with pytest.raises(SettingsError, match='secrets_dir has more than 100 entries'):
++        NestedSecretsSettingsSource.load_secrets(tmp_path.resolve())
++
++
+ @pytest.mark.parametrize(
+     'conf,secrets,dirs,expected',
+     (

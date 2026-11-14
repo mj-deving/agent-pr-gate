@@ -1,0 +1,84 @@
+diff --git a/packages/client/src/internals/inputWithTrackedEventId.ts b/packages/client/src/internals/inputWithTrackedEventId.ts
+index e429f734447..f2ba2fb6998 100644
+--- a/packages/client/src/internals/inputWithTrackedEventId.ts
++++ b/packages/client/src/internals/inputWithTrackedEventId.ts
+@@ -1,3 +1,5 @@
++import { isObject } from '@trpc/server/unstable-core-do-not-import';
++
+ export function inputWithTrackedEventId(
+   input: unknown,
+   lastEventId: string | undefined,
+@@ -5,7 +7,8 @@ export function inputWithTrackedEventId(
+   if (!lastEventId) {
+     return input;
+   }
+-  if (input != null && typeof input !== 'object') {
++  // the server's `isObject` excludes arrays, so spreading one here would corrupt it
++  if (input != null && !isObject(input)) {
+     return input;
+   }
+   return {
+diff --git a/packages/client/src/links/localLink.test.ts b/packages/client/src/links/localLink.test.ts
+index 266038a4fcb..dbaf3d34a45 100644
+--- a/packages/client/src/links/localLink.test.ts
++++ b/packages/client/src/links/localLink.test.ts
+@@ -677,6 +677,59 @@ test('subscription reconnects on errors with the last event id', async () => {
+   `);
+ });
+ 
++test('subscription reconnects with an array input', async () => {
++  const t = initTRPC.create();
++
++  const receivedInputs: unknown[] = [];
++
++  const appRouter = t.router({
++    hello: t.procedure
++      .input(z.array(z.string()))
++      .subscription(async function* (opts) {
++        receivedInputs.push(opts.input);
++        for (let i = 0; i < 3; i++) {
++          yield tracked(String(i), opts.input.join('|'));
++          // fail the first connection once, so the client has to reconnect
++          if (i === 0 && receivedInputs.length === 1) {
++            throw new Error('Threw on event 0');
++          }
++        }
++      }),
++  });
++
++  const ctx = localLinkClient<typeof appRouter>({
++    router: appRouter,
++    createContext: async () => ({}),
++  });
++
++  type Data = { id: string; data: string };
++  const result = await new Promise<Data[]>((resolve, reject) => {
++    const aggregated: Data[] = [];
++    ctx.client.hello.subscribe(['a', 'b'], {
++      onData: (data) => {
++        aggregated.push(data);
++      },
++      onComplete: () => {
++        resolve(aggregated);
++      },
++      onError: reject,
++    });
++  });
++
++  // without the fix the array is spread into an object and fails `z.array()`
++  expect(receivedInputs).toEqual([
++    ['a', 'b'],
++    ['a', 'b'],
++  ]);
++  expect(result.map((entry) => entry.data)).toEqual([
++    'a|b',
++    'a|b',
++    'a|b',
++    'a|b',
++  ]);
++  expect(ctx.onError).toHaveBeenCalledTimes(1);
++});
++
+ test('forwards origin error as cause when using localLink', async () => {
+   const t = initTRPC.create();
+ 

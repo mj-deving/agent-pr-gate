@@ -1,0 +1,117 @@
+diff --git a/tests/protocols/test_websocket.py b/tests/protocols/test_websocket.py
+index bb326ad57..adc5cacc2 100644
+--- a/tests/protocols/test_websocket.py
++++ b/tests/protocols/test_websocket.py
+@@ -976,6 +976,32 @@ async def websocket_session(url: str):
+     assert disconnected_message == {"type": "websocket.disconnect", "code": 1006}
+ 
+ 
++async def test_server_reject_connection_does_not_log_incomplete_handshake(
++    ws_protocol_cls: WSProtocol,
++    http_protocol_cls: HTTPProtocol,
++    unused_tcp_port: int,
++    caplog: pytest.LogCaptureFixture,
++):
++    async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
++        assert scope["type"] == "websocket"
++        assert "websocket.http.response" in scope["extensions"]
++        await receive()
++        await send({"type": "websocket.http.response.start", "status": 401, "headers": []})
++        await send({"type": "websocket.http.response.body", "body": b"denied"})
++
++    async def websocket_session(url: str):
++        response = await wsresponse(url)
++        assert response.status_code == 401
++        assert response.content == b"denied"
++
++    config = Config(app=app, ws=ws_protocol_cls, http=http_protocol_cls, lifespan="off", port=unused_tcp_port)
++    with caplog.at_level("ERROR", logger="uvicorn.error"):
++        async with run_server(config):
++            await websocket_session(f"ws://127.0.0.1:{unused_tcp_port}")
++
++    assert "ASGI callable returned without completing handshake." not in caplog.text
++
++
+ async def test_server_reject_connection_with_invalid_status(
+     ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol, unused_tcp_port: int
+ ):
+@@ -1762,6 +1788,27 @@ async def test_shutdown_while_the_close_reply_is_pending(ws_protocol_cls: WSProt
+         assert not connection.awaiting_close_reply
+ 
+ 
++async def test_shutdown_during_denial_response(ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol):
++    body_started = asyncio.Event()
++    disconnect_message: ASGIReceiveEvent | None = None
++
++    async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
++        nonlocal disconnect_message
++        await receive()
++        await send({"type": "websocket.http.response.start", "status": 401, "headers": []})
++        await send({"type": "websocket.http.response.body", "body": b"den", "more_body": True})
++        body_started.set()
++        disconnect_message = await receive()
++
++    async with MockWebSocketConnection(app, ws_protocol_cls, http_protocol_cls) as connection:
++        await body_started.wait()
++        assert not connection.transport_closed
++        connection.shutdown()
++        assert connection.transport_closed
++    await connection.app_finished()
++    assert disconnect_message == {"type": "websocket.disconnect", "code": 1006}
++
++
+ async def test_send_after_peer_close_raises_client_disconnected(
+     ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol
+ ):
+diff --git a/uvicorn/protocols/websockets/websockets_sansio_impl.py b/uvicorn/protocols/websockets/websockets_sansio_impl.py
+index e13241b97..0d36bae98 100644
+--- a/uvicorn/protocols/websockets/websockets_sansio_impl.py
++++ b/uvicorn/protocols/websockets/websockets_sansio_impl.py
+@@ -134,7 +134,7 @@ def connection_made(self, transport: BaseTransport) -> None:
+ 
+     def connection_lost(self, exc: Exception | None) -> None:
+         self.stop_keepalive()
+-        code = 1005 if self.handshake_complete else 1006
++        code = 1005 if self.handshake_complete and self.initial_response is None else 1006
+         self.queue.put_nowait({"type": "websocket.disconnect", "code": code})
+         self.connections.remove(self)
+ 
+@@ -176,7 +176,7 @@ def shutdown(self) -> None:
+                 self.close_timer = None
+             self.transport.close()
+             return
+-        if self.handshake_complete:
++        if self.handshake_complete and self.initial_response is None:
+             self.queue.put_nowait({"type": "websocket.disconnect", "code": 1012})
+             self.conn.send_close(1012)
+             output = self.conn.data_to_send()
+@@ -480,6 +480,7 @@ async def send(self, message: ASGISendEvent) -> None:
+                     for name, value in list(message.get("headers", []))
+                 ]
+                 self.initial_response = (message["status"], headers, b"")
++                self.handshake_complete = True
+             else:
+                 raise RuntimeError(
+                     "Expected ASGI message 'websocket.accept', 'websocket.close' "
+diff --git a/uvicorn/protocols/websockets/wsproto_impl.py b/uvicorn/protocols/websockets/wsproto_impl.py
+index 086abfdb0..87e9a6207 100644
+--- a/uvicorn/protocols/websockets/wsproto_impl.py
++++ b/uvicorn/protocols/websockets/wsproto_impl.py
+@@ -139,7 +139,7 @@ def connection_made(self, transport: asyncio.Transport) -> None:  # type: ignore
+ 
+     def connection_lost(self, exc: Exception | None) -> None:
+         self.stop_keepalive()
+-        code = 1005 if self.handshake_complete else 1006
++        code = 1005 if self.handshake_complete and not self.response_started else 1006
+         self.queue.put_nowait({"type": "websocket.disconnect", "code": code})
+         self.connections.remove(self)
+ 
+@@ -211,7 +211,7 @@ def shutdown(self) -> None:
+                 self.close_timer = None
+             self.transport.close()
+             return
+-        if self.handshake_complete:
++        if self.handshake_complete and not self.response_started:
+             self.queue.put_nowait({"type": "websocket.disconnect", "code": 1012})
+             output = self.conn.send(wsproto.events.CloseConnection(code=1012))
+             self.transport.write(output)

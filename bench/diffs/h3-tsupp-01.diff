@@ -1,0 +1,220 @@
+diff --git a/build.config.ts b/build.config.ts
+index dd6ce990..1cb155c5 100644
+--- a/build.config.ts
++++ b/build.config.ts
+@@ -5,6 +5,6 @@ export default defineBuildConfig({
+   rollup: {
+     emitCJS: true,
+   },
+-  entries: ["src/index", "src/node"],
++  entries: ["src/index"],
+   externals: ["undici"],
+ });
+diff --git a/package.json b/package.json
+index 9ce5ae58..7643927f 100644
+--- a/package.json
++++ b/package.json
+@@ -8,52 +8,8 @@
+   "type": "module",
+   "exports": {
+     "./package.json": "./package.json",
+-    ".": {
+-      "browser": "./dist/index.mjs",
+-      "bun": "./dist/index.mjs",
+-      "deno": "./dist/index.mjs",
+-      "edge-light": "./dist/index.mjs",
+-      "edge-routine": "./dist/index.mjs",
+-      "netlify": "./dist/index.mjs",
+-      "react-native": "./dist/index.mjs",
+-      "wintercg": "./dist/index.mjs",
+-      "worker": "./dist/index.mjs",
+-      "workerd": "./dist/index.mjs",
+-      "node": {
+-        "import": {
+-          "types": "./dist/node.d.mts",
+-          "default": "./dist/node.mjs"
+-        },
+-        "require": {
+-          "types": "./dist/node.d.cts",
+-          "default": "./dist/node.cjs"
+-        }
+-      },
+-      "import": {
+-        "types": "./dist/index.d.mts",
+-        "default": "./dist/index.mjs"
+-      },
+-      "require": {
+-        "types": "./dist/node.d.cts",
+-        "default": "./dist/node.cjs"
+-      },
+-      "types": "./dist/index.d.mts",
+-      "default": "./dist/index.mjs"
+-    },
+-    "./node": {
+-      "import": {
+-        "types": "./dist/node.d.mts",
+-        "default": "./dist/node.mjs"
+-      },
+-      "require": {
+-        "types": "./dist/node.d.cts",
+-        "default": "./dist/node.cjs"
+-      }
+-    }
++    "./dist/index.mjs": "./dist/index.mjs"
+   },
+-  "main": "./dist/node.cjs",
+-  "module": "./dist/index.mjs",
+-  "react-native": "./dist/index.mjs",
+   "types": "./dist/index.d.ts",
+   "files": [
+     "dist",
+@@ -71,7 +27,6 @@
+   },
+   "dependencies": {
+     "destr": "^2.0.5",
+-    "node-fetch-native": "^1.6.7",
+     "ufo": "^1.6.1"
+   },
+   "devDependencies": {
+diff --git a/src/fetch.ts b/src/fetch.ts
+index 265775bc..691cb387 100644
+--- a/src/fetch.ts
++++ b/src/fetch.ts
+@@ -35,11 +35,8 @@ const retryStatusCodes = new Set([
+ const nullBodyResponses = new Set([101, 204, 205, 304]);
+ 
+ export function createFetch(globalOptions: CreateFetchOptions = {}): $Fetch {
+-  const {
+-    fetch = globalThis.fetch,
+-    Headers = globalThis.Headers,
+-    AbortController = globalThis.AbortController,
+-  } = globalOptions;
++  // @ts-expect-error globalThis.fetch is optional in some runtimes
++  const { fetch = globalThis.fetch } = globalOptions;
+ 
+   async function onError(context: FetchContext): Promise<FetchResponse<any>> {
+     // Is Abort
+diff --git a/src/index.ts b/src/index.ts
+index a015c355..1b091e0f 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -5,33 +5,11 @@ export * from "./base.ts";
+ 
+ export type * from "./types.ts";
+ 
+-// ref: https://github.com/tc39/proposal-global
+-const _globalThis = (function () {
+-  if (typeof globalThis !== "undefined") {
+-    return globalThis;
+-  }
+-  /* eslint-disable unicorn/prefer-global-this */
+-  if (typeof self !== "undefined") {
+-    return self;
+-  }
+-  if (typeof window !== "undefined") {
+-    return window;
+-  }
+-  if (typeof global !== "undefined") {
+-    return global;
+-  }
+-  /* eslint-enable unicorn/prefer-global-this */
+-  throw new Error("unable to locate global object");
+-})();
+-
+-// ref: https://github.com/unjs/ofetch/issues/295
+-export const fetch: typeof globalThis.fetch = _globalThis.fetch
+-  ? (...args: Parameters<typeof globalThis.fetch>) => _globalThis.fetch(...args)
++// Allow patching globalThis.fetch
++export const fetch: typeof globalThis.fetch = globalThis.fetch
++  ? (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args)
+   : () => Promise.reject(new Error("[ofetch] global.fetch is not supported!"));
+ 
+-export const Headers: typeof globalThis.Headers = _globalThis.Headers;
+-export const AbortController: typeof globalThis.AbortController =
+-  _globalThis.AbortController;
++export const ofetch: $Fetch = createFetch({ fetch });
+ 
+-export const ofetch: $Fetch = createFetch({ fetch, Headers, AbortController });
+ export const $fetch: $Fetch = ofetch;
+diff --git a/src/node.ts b/src/node.ts
+deleted file mode 100644
+index 8d256036..00000000
+--- a/src/node.ts
++++ /dev/null
+@@ -1,48 +0,0 @@
+-import http from "node:http";
+-import https, { type AgentOptions } from "node:https";
+-import nodeFetch, {
+-  Headers as _Headers,
+-  AbortController as _AbortController,
+-} from "node-fetch-native";
+-
+-import { createFetch } from "./base.ts";
+-import type { $Fetch } from "./types.ts";
+-
+-export * from "./base.ts";
+-export type * from "./types.ts";
+-
+-export function createNodeFetch(): typeof globalThis.fetch {
+-  const useKeepAlive = JSON.parse(process.env.FETCH_KEEP_ALIVE || "false");
+-  if (!useKeepAlive) {
+-    return nodeFetch;
+-  }
+-
+-  // https://github.com/node-fetch/node-fetch#custom-agent
+-  const agentOptions: AgentOptions = { keepAlive: true };
+-  const httpAgent = new http.Agent(agentOptions);
+-  const httpsAgent = new https.Agent(agentOptions);
+-  const nodeFetchOptions = {
+-    agent(parsedURL: any) {
+-      return parsedURL.protocol === "http:" ? httpAgent : httpsAgent;
+-    },
+-  };
+-
+-  return function nodeFetchWithKeepAlive(
+-    input: RequestInfo,
+-    init?: RequestInit
+-  ) {
+-    return (nodeFetch as any)(input, { ...nodeFetchOptions, ...init });
+-  } as any;
+-}
+-
+-export const fetch: typeof globalThis.fetch = globalThis.fetch
+-  ? (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args)
+-  : (createNodeFetch() as typeof globalThis.fetch);
+-
+-export const Headers: typeof globalThis.Headers =
+-  globalThis.Headers || _Headers;
+-export const AbortController: typeof globalThis.AbortController =
+-  globalThis.AbortController || _AbortController;
+-
+-export const ofetch: $Fetch = createFetch({ fetch, Headers, AbortController });
+-export const $fetch: $Fetch = ofetch;
+diff --git a/src/types.ts b/src/types.ts
+index e6e1a9dd..66a84faf 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -80,8 +80,6 @@ export interface ResolvedFetchOptions<
+ export interface CreateFetchOptions {
+   defaults?: FetchOptions;
+   fetch?: Fetch;
+-  Headers?: typeof Headers;
+-  AbortController?: typeof AbortController;
+ }
+ 
+ export type GlobalOptions = Pick<
+diff --git a/test/index.test.ts b/test/index.test.ts
+index 5abb6244..4ea4cb6b 100644
+--- a/test/index.test.ts
++++ b/test/index.test.ts
+@@ -9,9 +9,8 @@ import {
+ } from "vitest";
+ import { Readable } from "node:stream";
+ import { H3, HTTPError, readBody, serve } from "h3";
+-import { Headers, FormData, Blob } from "node-fetch-native";
+ import { nodeMajorVersion } from "std-env";
+-import { $fetch } from "../src/node.ts";
++import { $fetch } from "../src/index.ts";
+ 
+ describe("ofetch", () => {
+   let listener: ReturnType<typeof serve>;

@@ -1,0 +1,252 @@
+diff --git a/src/language-js/comments/attach/handle-switch-statement-comments.js b/src/language-js/comments/attach/handle-switch-statement-comments.js
+index a672f332d8fa..b24fa90dfb41 100644
+--- a/src/language-js/comments/attach/handle-switch-statement-comments.js
++++ b/src/language-js/comments/attach/handle-switch-statement-comments.js
+@@ -16,22 +16,25 @@ function handleSwitchStatementComments({
+   followingNode,
+   text,
+ }) {
+-  if (!(
+-    enclosingNode?.type === "SwitchStatement" &&
+-    enclosingNode.cases.length === 0 &&
++  if (
++    enclosingNode &&
++    precedingNode &&
+     !followingNode &&
+-    precedingNode === enclosingNode.discriminant
+-  )) {
+-    return false;
+-  }
+-
+-  const nextCharacter = getNextNonSpaceNonCommentCharacter(
+-    text,
+-    locEnd(comment),
+-  );
++    ((enclosingNode.type === "SwitchStatement" &&
++      precedingNode === enclosingNode.discriminant) ||
++      ((enclosingNode.type === "MatchExpression" ||
++        enclosingNode.type === "MatchStatement") &&
++        precedingNode === enclosingNode.argument)) &&
++    enclosingNode.cases.length === 0
++  ) {
++    const nextCharacter = getNextNonSpaceNonCommentCharacter(
++      text,
++      locEnd(comment),
++    );
+ 
+-  if (nextCharacter === "}") {
+-    return addDanglingComment(enclosingNode, comment);
++    if (nextCharacter === "}") {
++      return addDanglingComment(enclosingNode, comment);
++    }
+   }
+ 
+   return false;
+diff --git a/src/language-js/print/flow.js b/src/language-js/print/flow.js
+index 2e92d90d3ea9..d68333f73739 100644
+--- a/src/language-js/print/flow.js
++++ b/src/language-js/print/flow.js
+@@ -40,7 +40,7 @@ import { printIntersectionType } from "./intersection-type.js";
+ import { printKey } from "./key.js";
+ import { printBigInt } from "./literal.js";
+ import { printFlowMappedTypeProperty } from "./mapped-type.js";
+-import { printMatch, printMatchCase, printMatchPattern } from "./match.js";
++import { printMatchCase, printMatchPattern } from "./match.js";
+ import {
+   printAbstractToken,
+   printDeclareToken,
+@@ -57,6 +57,7 @@ import { printOpaqueType } from "./opaque-type.js";
+ import { printParameterProperty } from "./parameter-property.js";
+ import { printSpreadElement } from "./rest-element.js";
+ import { printRestType } from "./rest-type.js";
++import { printMatch } from "./switch-statement.js";
+ import { printTemplateLiteral } from "./template-literal.js";
+ import { printTernary } from "./ternary.js";
+ import { printNamedTupleMember } from "./tuple.js";
+diff --git a/src/language-js/print/match.js b/src/language-js/print/match.js
+index 69c7d2afce1b..27ce912da722 100644
+--- a/src/language-js/print/match.js
++++ b/src/language-js/print/match.js
+@@ -1,7 +1,6 @@
+ import {
+   align,
+   group,
+-  hardline,
+   ifBreak,
+   indent,
+   join,
+@@ -16,42 +15,12 @@ import needsParentheses from "../parentheses/needs-parentheses.js";
+ import { CommentCheckFlags, hasComment } from "../utilities/comments.js";
+ import { createTypeCheckFunction } from "../utilities/create-type-check-function.js";
+ import { hasLeadingOwnLineComment } from "../utilities/has-leading-own-line-comment.js";
+-import { isNextLineEmpty } from "../utilities/is-next-line-empty.js";
+-
+-/*
+-- `MatchExpression` (Flow)
+-- `MatchStatement` (Flow)
+-*/
+-export function printMatch(path, options, print) {
+-  const { node } = path;
+-  return [
+-    group(["match (", indent([softline, print("argument")]), softline, ")"]),
+-    " {",
+-    node.cases.length > 0
+-      ? indent([
+-          hardline,
+-          join(
+-            hardline,
+-            path.map(
+-              ({ node, isLast }) => [
+-                print(),
+-                !isLast && isNextLineEmpty(node, options) ? hardline : "",
+-              ],
+-              "cases",
+-            ),
+-          ),
+-        ])
+-      : "",
+-    hardline,
+-    "}",
+-  ];
+-}
+ 
+ /*
+ - `MatchExpressionCase` (Flow)
+ - `MatchStatementCase` (Flow)
+ */
+-export function printMatchCase(path, options, print) {
++function printMatchCase(path, options, print) {
+   const { node } = path;
+ 
+   const comment = hasComment(node, CommentCheckFlags.Dangling)
+@@ -84,7 +53,7 @@ export function printMatchCase(path, options, print) {
+ - `MatchObjectPatternProperty` (Flow)
+ - `MatchRestPattern` (Flow)
+ */
+-export function printMatchPattern(path, options, print) {
++function printMatchPattern(path, options, print) {
+   const { node } = path;
+ 
+   switch (node.type) {
+@@ -252,3 +221,5 @@ function printMatchOrPattern(path, options, print) {
+ 
+   return group(shouldIndent ? indent(code) : code);
+ }
++
++export { printMatchCase, printMatchPattern };
+diff --git a/src/language-js/print/switch-statement.js b/src/language-js/print/switch-statement.js
+index 915a68fae4cd..7c6dc23654ff 100644
+--- a/src/language-js/print/switch-statement.js
++++ b/src/language-js/print/switch-statement.js
+@@ -10,11 +10,22 @@ import { CommentCheckFlags, hasComment } from "../utilities/comments.js";
+ import { isNextLineEmpty } from "../utilities/is-next-line-empty.js";
+ import { printStatementSequence } from "./statement-sequence.js";
+ 
+-function printSwitchStatement(path, options, print) {
++/*
++- `SwitchStatement`
++- `MatchExpression` (Flow)
++- `MatchStatement` (Flow)
++*/
++function printSwitchStatementLike(
++  path,
++  options,
++  print,
++  { keyword, headProperty },
++) {
+   return [
+     group([
+-      "switch (",
+-      indent([softline, print("discriminant")]),
++      keyword,
++      " (",
++      indent([softline, print(headProperty)]),
+       softline,
+       ")",
+     ]),
+@@ -39,6 +50,20 @@ function printSwitchStatement(path, options, print) {
+   ];
+ }
+ 
++function printSwitchStatement(path, options, print) {
++  return printSwitchStatementLike(path, options, print, {
++    keyword: "switch",
++    headProperty: "discriminant",
++  });
++}
++
++function printMatch(path, options, print) {
++  return printSwitchStatementLike(path, options, print, {
++    keyword: "match",
++    headProperty: "argument",
++  });
++}
++
+ function printSwitchCase(path, options, print) {
+   const { node } = path;
+   const parts = [];
+@@ -69,4 +94,4 @@ function printSwitchCase(path, options, print) {
+   return parts;
+ }
+ 
+-export { printSwitchCase, printSwitchStatement };
++export { printMatch, printSwitchCase, printSwitchStatement };
+diff --git a/tests/format/flow/match/dangling-comments.js b/tests/format/flow/match/dangling-comments.js
+new file mode 100644
+index 000000000000..f9dd5e0a9ee7
+--- /dev/null
++++ b/tests/format/flow/match/dangling-comments.js
+@@ -0,0 +1,11 @@
++match(a) {
++  /* comment */
++
++  // comment
++}
++
++a = match(a) {
++  /* comment */
++
++  // comment
++}
+diff --git a/scripts/release/tests/validate-new-version.test.js b/scripts/release/tests/validate-new-version.test.js
+deleted file mode 100644
+--- a/scripts/release/tests/validate-new-version.test.js
++++ /dev/null
+@@ -1,37 +0,0 @@
+-import assert from "node:assert/strict";
+-import { describe, it } from "node:test";
+-import styleText from "node-style-text";
+-import validateNewVersion from "../steps/validate-new-version.js";
+-
+-describe("validate-new-version", () => {
+-  it("throws error for missing version", () => {
+-    assert.throws(
+-      () => {
+-        validateNewVersion({});
+-      },
+-      { message: "'--version' is required" },
+-    );
+-  });
+-  it("throws error for invalid version", () => {
+-    assert.throws(
+-      () => {
+-        validateNewVersion({ version: "foo" });
+-      },
+-      {
+-        message: `Invalid version '${styleText.red.underline("foo")}' specified`,
+-      },
+-    );
+-  });
+-  it("throws error when version isn't greater than prev version", () => {
+-    assert.throws(
+-      () => {
+-        validateNewVersion({ version: "0.0.1", previousVersion: "0.0.2" });
+-      },
+-      {
+-        message: `Version '${styleText.yellow.underline(
+-          "0.0.1",
+-        )}' has already been published`,
+-      },
+-    );
+-  });
+-});

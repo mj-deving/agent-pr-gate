@@ -1,0 +1,112 @@
+diff --git a/pydantic_settings/sources/providers/cli.py b/pydantic_settings/sources/providers/cli.py
+index 41e1ab32..abb8493b 100644
+--- a/pydantic_settings/sources/providers/cli.py
++++ b/pydantic_settings/sources/providers/cli.py
+@@ -1796,18 +1796,16 @@ def _flatten_serialized_args(
+         serialized_args: dict[str, list[str]],
+         positionals_first: bool,
+     ) -> list[str]:
+-        return (
+-            (
+-                serialized_args['optional'] + serialized_args['positional']
+-                if not positionals_first
+-                else serialized_args['positional'] + serialized_args['optional']
+-            )
+-            + serialized_args['subcommand']
+-            # Unknown args are emitted last, regardless of positionals_first. They are replayed verbatim and may
+-            # contain an end-of-options marker ('--') or an unknown option, either of which would capture known args
+-            # that follow it.
+-            + serialized_args['unknown']
++        known = (
++            serialized_args['optional'] + serialized_args['positional']
++            if not positionals_first
++            else serialized_args['positional'] + serialized_args['optional']
+         )
++        # This level's unknown args are emitted before its subcommand tokens. Everything after a subcommand token
++        # is parsed by that subcommand, so unknowns placed there would come back on the wrong field. That ordering
++        # also keeps them after the known args of this level, so an unknown positional cannot be consumed as a known
++        # one, and an end-of-options marker cannot swallow a known arg that follows it.
++        return known + serialized_args['unknown'] + serialized_args['subcommand']
+ 
+     def _serialized_args(
+         self,
+@@ -1830,7 +1828,7 @@ def _serialized_args(
+                 continue
+             if _CliUnknownArgs in field_info.metadata:
+                 # Unknown args are registered without option names or positional metadata, so there is no parser map
+-                # entry to serialize from. Replay the captured args verbatim in their own trailing segment.
++                # entry to serialize from. Replay the captured args verbatim in their own segment.
+                 unknown_args += model_default
+                 continue
+             arg = next(iter(self._parser_map[field_info].values()))
+@@ -1843,10 +1841,9 @@ def _serialized_args(
+                     positionals_first=positionals_first,
+                     _is_submodel=True,
+                 )
+-                # Hoist the subcommand's unknown args into this model's trailing segment so that all unknown args,
+-                # at any depth, stay at the very end of the serialized output.
+-                unknown_args += sub_args['unknown']
+-                sub_args['unknown'] = []
++                # Everything after the subcommand token is parsed by the subcommand, so its unknown args stay in its
++                # own segment instead of being lifted into this level's. That keeps each level's unknowns with the
++                # level that captured them, which is what makes the round trip hold (#1048).
+                 subcommand_args += self._flatten_serialized_args(sub_args, positionals_first)
+                 continue
+             if _is_model_or_dataclass(type(model_default)):
+diff --git a/tests/test_source_cli.py b/tests/test_source_cli.py
+index 43f42d92..7a0e3187 100644
+--- a/tests/test_source_cli.py
++++ b/tests/test_source_cli.py
+@@ -3029,6 +3029,52 @@ class Cfg(BaseSettings, cli_ignore_unknown_args=True):
+     }
+ 
+ 
++def test_cli_unknown_args_round_trip_when_a_parent_has_some():
++    class SubCmd(BaseSettings, cli_ignore_unknown_args=True):
++        v0: int = 0
++        unknown_args: CliUnknownArgs
++
++    class Root(BaseSettings, cli_ignore_unknown_args=True):
++        unknown_args: CliUnknownArgs
++        sub_cmd: CliSubCommand[SubCmd]
++
++    root = CliApp.run(Root, cli_args=['--unk-root', 'sub_cmd', '--unk-sub'])
++    assert root.unknown_args == ['--unk-root']
++    assert root.sub_cmd is not None and root.sub_cmd.unknown_args == ['--unk-sub']
++
++    # A parent's unknown args have to be emitted before the subcommand token: argparse hands everything after
++    # that token to the subcommand, so emitting them last would move them onto the subcommand's field (#1048).
++    serialized = CliApp.serialize(root)
++    assert serialized == ['--unk-root', 'sub_cmd', '--unk-sub']
++
++    again = CliApp.run(Root, cli_args=serialized)
++    assert again.unknown_args == ['--unk-root']
++    assert again.sub_cmd is not None and again.sub_cmd.unknown_args == ['--unk-sub']
++    assert again == root
++
++
++def test_cli_unknown_args_round_trip_through_two_subcommand_levels():
++    class Leaf(BaseSettings, cli_ignore_unknown_args=True):
++        unknown_args: CliUnknownArgs
++
++    class Mid(BaseSettings, cli_ignore_unknown_args=True):
++        unknown_args: CliUnknownArgs
++        leaf: CliSubCommand[Leaf]
++
++    class Top(BaseSettings, cli_ignore_unknown_args=True):
++        unknown_args: CliUnknownArgs
++        mid: CliSubCommand[Mid]
++
++    top = CliApp.run(Top, cli_args=['--unk-top', 'mid', '--unk-mid', 'leaf', '--unk-leaf'])
++    assert top.mid is not None and top.mid.leaf is not None
++    assert top.unknown_args == ['--unk-top']
++    assert top.mid.unknown_args == ['--unk-mid']
++    assert top.mid.leaf.unknown_args == ['--unk-leaf']
++
++    again = CliApp.run(Top, cli_args=CliApp.serialize(top))
++    assert again == top
++
++
+ def test_cli_unknown_args_are_not_shared_across_depths():
+     class SubCmd(BaseSettings, cli_ignore_unknown_args=True):
+         v0: int = 0

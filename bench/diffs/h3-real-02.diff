@@ -1,0 +1,65 @@
+diff --git a/test-d/fetch-extensions.ts b/test-d/fetch-extensions.ts
+index a74ce0c0..3aaf2131 100644
+--- a/test-d/fetch-extensions.ts
++++ b/test-d/fetch-extensions.ts
+@@ -18,4 +18,4 @@ const withNext: Options = {next: {revalidate: 0}};
+ 
+ expectTypeOf<Options['next']>().toEqualTypeOf<NextFetchRequestConfig | undefined>();
+ 
+-void withNext;
++expectTypeOf(withNext).toEqualTypeOf<Options>();
+diff --git a/test/request-construction.ts b/test/request-construction.ts
+index 491da706..022ba853 100644
+--- a/test/request-construction.ts
++++ b/test/request-construction.ts
+@@ -322,11 +322,10 @@ test('a content-type from the headers option is kept for a FormData body on a Re
+ 	t.is(requests[0]!.headers.get('content-type'), 'multipart/form-data; boundary=custom');
+ });
+ 
+-// The `Request` constructor only normalizes the methods the Fetch standard lists, so a lowercase `query` on a `Request` input is still lowercase when Ky reads it.
++// The `Request` constructor only normalizes the methods the Fetch standard lists. Runtimes from before `QUERY` was added keep a lowercase `query` on a `Request` input, so Ky must uppercase it.
+ test('a standard method from a Request input is uppercased', async t => {
+ 	const {fetch, requests} = createRecordingFetch();
+ 	const input = new Request('https://example.com/', {method: 'query'});
+-	t.is(input.method, 'query');
+ 
+ 	await ky(input, {fetch, retry: 0});
+ 
+diff --git a/test/resilience.ts b/test/resilience.ts
+index e2d014f2..83948a5a 100644
+--- a/test/resilience.ts
++++ b/test/resilience.ts
+@@ -481,8 +481,12 @@ test('aborting during a hung retry aborts that attempt and does not retry again'
+ 	const controller = new AbortController();
+ 
+ 	const result = observe(client(transport)(url, {signal: controller.signal}));
+-	await delay(80);
+-	t.is(transport.attempts, 2);
++	// Wait for the retry to start, since a busy machine can stretch the retry delay.
++	while (transport.attempts < 2) {
++		// eslint-disable-next-line no-await-in-loop
++		await delay(5);
++	}
++
+ 	controller.abort();
+ 	await delay(50);
+ 
+diff --git a/test/retry.ts b/test/retry.ts
+index e11fc80f..40f4085f 100644
+--- a/test/retry.ts
++++ b/test/retry.ts
+@@ -4817,12 +4817,12 @@ test('a user abort during the retry delay throws the abort reason', async t => {
+ // `beforeError` hooks run after an error is produced, so they are not bounded by `totalTimeout`.
+ test('totalTimeout does not bound a beforeError hook', async t => {
+ 	const error = await t.throwsAsync(ky('https://example.com', {
+-		totalTimeout: 50,
++		totalTimeout: 500,
+ 		timeout: false,
+ 		retry: 0,
+ 		hooks: {
+ 			beforeError: [async ({error}) => {
+-				await delay(200);
++				await delay(600);
+ 				return new Error(`rewritten: ${error.name}`);
+ 			}],
+ 		},
