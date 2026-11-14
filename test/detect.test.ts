@@ -340,7 +340,7 @@ describe("test file renamed out of the test convention", () => {
   test("moved out of __tests__ into src is test-deleted", () => {
     expect(detect(fileDiff("src/foo.ts", [], { renamedFrom: "src/__tests__/foo.ts" })).map((x) => x.class)).toEqual(["test-deleted"]);
   });
-  test.skip("rename that stays a test file is no finding", () => {
+  test("rename that stays a test file is no finding", () => {
     expect(detect(fileDiff("tests/unit/a.test.ts", [], { renamedFrom: "test/a.test.ts" }))).toEqual([]);
   });
 });
